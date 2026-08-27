@@ -654,4 +654,52 @@ public class D2CharacterTest {
         assertTrue(items.stream().anyMatch(i -> i.getItemName() != null
                 && i.getItemName().contains("Heaven Facet")), "Heaven Facet after the grabbers");
     }
+
+    // Another re-save of the same Reimagined paladin, this time carrying the unique ring "Opalvein"
+    // ("15% Chance to cast level 2 Flame Wave on attack"). A flag-29 item whose granted skill is a
+    // "chance to cast ... on attack" (item_skillonattack, stat 195) carries 64 more trailing bits
+    // than the standard 52-bit flag-29 skill blob (see the blob's comment in D2Item.readExtend).
+    // Under the old rule Opalvein read exactly 64 bits short and every item after it failed, stopping
+    // the load at item 84 of 125; the first item to fail to decode was the ring immediately after it,
+    // "Raven Frost". This asserts the whole file now loads, that Opalvein decoded with its on-attack
+    // skill stat, and that Raven Frost is back in place right after it. Distinct from the file's other
+    // flag-29 chance-to-cast rings ("Wisp Projector", "Carrion Wind"), whose grants are on *striking*
+    // / *when struck* (stats 198/201) and which decoded correctly at the standard 52 with no extra
+    // bits -- so the 64 is specific to the on-attack variant, not chance-to-cast in general.
+    @Test
+    public void reimaginedPaladinWithCastOnAttackRingLoadsFully() throws Exception {
+        D2TxtFile.constructTxtFiles("./d2111");
+        D2Character d2Character = new D2Character(
+                new File(Resources.getResource("charFiles/pally8.d2s").toURI()).getAbsolutePath());
+
+        assertEquals("pally", d2Character.getCharName());
+        assertEquals("Paladin", d2Character.getCharClass());
+        assertEquals(100, d2Character.getCharLevel());
+        assertFalse(d2Character.isItemsIncomplete(), d2Character.getItemsIncompleteReason());
+
+        List<D2Item> items = d2Character.getItemList();
+        assertEquals(135, items.size());
+
+        int opalveinIdx = -1;
+        for (int i = 0; i < items.size(); i++) {
+            if ("Opalvein".equals(items.get(i).getItemName())) {
+                opalveinIdx = i;
+                break;
+            }
+        }
+        assertTrue(opalveinIdx >= 0, "Opalvein decoded");
+
+        // Opalvein carries the item_skillonattack stat (id 195) -- the "cast on attack" grant that
+        // lengthens its flag-29 blob by 64 bits and the whole reason this file failed to load.
+        D2Item opalvein = items.get(opalveinIdx);
+        assertTrue(opalvein.getPropCollection().stream()
+                        .anyMatch(o -> ((gomule.item.D2Prop) o).getPNum() == 195),
+                "Opalvein has the on-attack chance-to-cast stat");
+
+        // The ring immediately after Opalvein is the one that first desynced under the old rule --
+        // its decoding proves Opalvein's trailing length (and hence the +64) is right, not just that
+        // nothing threw.
+        assertEquals("Raven Frost", items.get(opalveinIdx + 1).getItemName(),
+                "the ring right after Opalvein decodes");
+    }
 }

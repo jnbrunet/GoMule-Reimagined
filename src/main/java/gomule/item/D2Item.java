@@ -748,8 +748,41 @@ public class D2Item implements Comparable, D2ItemInterface {
         // same bits appear BEFORE its sockets instead and are skipped up in the socket loop (see the
         // "Hand of Blessed Light" comment there), so counting them again here would double-skip.
         if (iSocketNrFilled == 0 && check_flag(29) && !isElementalFacet() && usesPostV99ItemFormat()) {
-            pFile.skipBits(hasElementalSkillProperty() ? 56 : 52);
+            // The base flag-29 skill blob is 52 bits, or 56 when the item grants an elemental-skill
+            // bonus (see hasElementalSkillProperty()). A flag-29 item whose granted skill is a
+            // "chance to cast ... on attack" (item_skillonattack, stat 195 -- the "att-skill"
+            // property) carries a further 64 bits on top of that. This was found and confirmed
+            // against a real Paladin character's unique ring "Opalvein" (uid 415, "15% Chance to cast
+            // level 2 Flame Wave on attack"): its body read exactly 64 bits short, desyncing the very
+            // next item, and adding these 64 bits was the only offset that let the rest of the file
+            // decode -- the next item coming out as a real, recognizable unique ring ("Raven Frost")
+            // and the whole 125-item character then reaching a clean, complete load, cross-checked
+            // against an independent brute-force chain-scan of the raw bytes that put the true next
+            // boundary exactly where +64 lands. Keyed on the stat (item_skillonattack), not the item
+            // code, deliberately -- the point is the "cast on attack" grant, not the ring. Crucially
+            // this is NOT "any chance-to-cast": the same file carried a "Wisp Projector" and a
+            // "Carrion Wind", both also flag-29 rings with a chance-to-cast, but on *striking*
+            // (item_skillonhit, stat 198) / *when struck* (item_skillongethit, 201) -- and both
+            // decoded correctly at the standard 52 with NO extra bits, so the extra length belongs
+            // specifically to the on-attack variant. What these 64 bits hold is still unknown; this
+            // stays a length heuristic, not a decode of the blob. Left on the non-socketed path only,
+            // matching the base blob just above (a socketed cast-on-attack item, if one can even
+            // exist -- rings, the only confirmed carriers, can't be socketed -- would carry its blob
+            // before its sockets, like the other flag-29 items; no such sample has turned up).
+            pFile.skipBits((hasElementalSkillProperty() ? 56 : 52) + (hasSkillOnAttackProperty() ? 64 : 0));
         }
+    }
+
+    // True when this item's own property list carries an item_skillonattack stat (id 195) -- the
+    // "chance to cast ... on attack" grant. Read straight off the parsed stats (iProps) rather than
+    // the unique/set recipe so it also catches the same grant arriving as a magic/rare affix, and so
+    // it reflects what is actually stored in this item. See the flag-29 blob's caller for why the
+    // presence of this stat lengthens that blob by 64 bits.
+    private boolean hasSkillOnAttackProperty() {
+        for (Object o : iProps) {
+            if (((D2Prop) o).getPNum() == 195) return true;
+        }
+        return false;
     }
 
     private void readExtend1(D2BitReader pFile) throws Exception {
