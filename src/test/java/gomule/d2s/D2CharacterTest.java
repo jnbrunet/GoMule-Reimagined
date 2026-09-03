@@ -702,4 +702,48 @@ public class D2CharacterTest {
         assertEquals("Raven Frost", items.get(opalveinIdx + 1).getItemName(),
                 "the ring right after Opalvein decodes");
     }
+
+    // A real Reimagined paladin's mercenary carried the set ring "The River Stix" (Hades'
+    // Underworld, base Demonhide Boots -- despite the name, this D2RMM set reuses a ring's set ID
+    // for a boots piece). setitems.txt says its only threshold bonus, "nofreeze"
+    // (item_cannotbefrozen), rolls a value (amin4a/amax4a "1"/"1"), but nothing was actually
+    // stored for it in this save -- reading it anyway (the old rule: "amin present -> a bonus
+    // list is stored") consumed the mercenary's next item's leading bits; the first item to
+    // desync was the ring right after it, "Fall From Grace". This is the real file that drove
+    // D2Item.isSetBonusListPresent() (see its comment and the "quality == 5" block's): a second
+    // real copy of this same ring needed threshold 4 read after all, so the fix confirms presence
+    // from the bitstream itself rather than from setitems.txt. This asserts the whole file now
+    // loads and every mercenary item -- including the two either side of The River Stix -- decoded
+    // as its real name, not "X's Ear"-shaped garbage.
+    @Test
+    public void reimaginedPaladinWithFixedFlagSetBonusRingLoadsFully() throws Exception {
+        D2TxtFile.constructTxtFiles("./d2111");
+        D2Character d2Character = new D2Character(
+                new File(Resources.getResource("charFiles/pally9.d2s").toURI()).getAbsolutePath());
+
+        assertEquals("mouchton", d2Character.getCharName());
+        assertEquals("Paladin", d2Character.getCharClass());
+        assertEquals(85, d2Character.getCharLevel());
+        assertFalse(d2Character.isItemsIncomplete(), d2Character.getItemsIncompleteReason());
+        assertEquals(89, d2Character.getItemList().size());
+
+        assertEquals(8, d2Character.getMercItemNr());
+        assertEquals("Warder's Bond", d2Character.getMercItem(2).getItemName());
+        assertEquals("The River Stix", d2Character.getMercItem(3).getItemName());
+        assertEquals("Fall From Grace", d2Character.getMercItem(4).getItemName());
+        assertEquals("Scout", d2Character.getMercItem(5).getItemName());
+        assertEquals("Anaconda Skin", d2Character.getMercItem(6).getItemName());
+        assertEquals("Sin and Greed", d2Character.getMercItem(7).getItemName());
+
+        // The River Stix's own three fixed properties (ac/lvl, move3, res-cold) decoded, proving
+        // its own property list is intact; item_cannotbefrozen (id 153) must NOT appear a second
+        // time as a stray threshold bonus.
+        D2Item riverStix = d2Character.getMercItem(3);
+        assertEquals(1, riverStix.getPropCollection().stream()
+                .filter(o -> ((gomule.item.D2Prop) o).getPNum() == 214).count(), "ac/lvl");
+        assertEquals(1, riverStix.getPropCollection().stream()
+                .filter(o -> ((gomule.item.D2Prop) o).getPNum() == 96).count(), "move3");
+        assertEquals(1, riverStix.getPropCollection().stream()
+                .filter(o -> ((gomule.item.D2Prop) o).getPNum() == 43).count(), "res-cold");
+    }
 }

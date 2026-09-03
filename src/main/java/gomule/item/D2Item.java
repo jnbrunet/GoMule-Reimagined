@@ -1058,6 +1058,29 @@ public class D2Item implements Comparable, D2ItemInterface {
         return statRow != null && !statRow.get("op").equals("");
     }
 
+    // Whether a set item's threshold-bonus property list setitems.txt says *could* be here
+    // (needsStoredBaseValue's rule, or the caller's own amin/amax check) actually *is* here for
+    // this specific saved instance -- see the "quality == 5" block's comment for two real
+    // instances of the same item ("The River Stix") needing opposite answers that no static rule
+    // predicted. A real property list always opens with a raw 9-bit stat ID, so peeking those 9
+    // bits (position is always restored, whichever way this returns) and checking whether they
+    // resolve to something real distinguishes "list present" from "list absent" using the actual
+    // file instead of a guess: the terminator (511, an empty-but-present list) or a real
+    // itemstatcost.txt row with a non-empty "Save Bits" both mean a real list starts here; the id
+    // that this fix exists because of -- The River Stix's absent threshold 4 reading as
+    // "stamdrainmindam", an in-range id whose "Save Bits" column is empty -- means these bits
+    // belong to something else (this item's own trailing bits) and the list itself isn't here.
+    private boolean isSetBonusListPresent(D2BitReader pFile) {
+        int lSavedPos = pFile.get_pos();
+        int lCandidateId = (int) pFile.read(9);
+        pFile.set_pos(lSavedPos);
+        if (lCandidateId == 511) return true;
+        // getRow() never returns null (out-of-range rows come back as an empty-valued wrapper --
+        // see D2TxtFile.getValue()'s bounds check), so an invalid id surfaces as an empty
+        // "Save Bits" exactly like a real but non-storable stat row would.
+        return !D2TxtFile.ITEM_STAT_COST.getRow(lCandidateId).get("Save Bits").equals("");
+    }
+
     // The flag-29 trailing skill blob is 4 bits longer for an item that grants an "elemental skill"
     // bonus -- properties.txt's fireskill/coldskill/lightningskill/poisonskill/magicskill, all of
     // which resolve to the item_elemskill stat -- than for one that only grants named/fixed skills
@@ -1278,10 +1301,28 @@ public class D2Item implements Comparable, D2ItemInterface {
         // list per active lSet flag", "read up to the highest active flag", and "one list per
         // threshold with any property at all" -- only "one list per threshold that rolls a
         // value" fits all three.
+        // Even that rule has an exception no static txt-driven guess can predict: setitems.txt
+        // marking a threshold as roll-capable (an amin/amax pair, or an op-based apar) does not
+        // guarantee THIS item instance ever actually rolled it -- two real copies of a D2RMM set
+        // ring, "The River Stix" (Hades' Underworld, its only roll-capable threshold being 4,
+        // "nofreeze"), needed opposite answers: one had nothing stored for threshold 4 at all
+        // (reading it read into the next item's bits and desynced the mercenary's next item), the
+        // other did have it stored -- and neither copy's lSet flags (both examples above, plus a
+        // real set item with EVERY threshold's own lSet flag clear yet its highest-rolling
+        // threshold still stored -- Janis' Gloves, threshold 5, "str") predict which. So rather
+        // than guess further from static data, each roll-capable threshold's list is confirmed
+        // against the bitstream itself before being read: a real property list always opens with
+        // a raw 9-bit stat ID, so isSetBonusListPresent() peeks those 9 bits (restoring position
+        // either way) and checks whether they resolve to the list terminator (511) or a real,
+        // Save-Bits-bearing itemstatcost.txt row; if instead they're a stray value that resolves
+        // to nothing real (this fix's own reason for existing: reading The River Stix's absent
+        // threshold 4 first manifested as exactly this -- an in-range but Save-Bits-less stat ID,
+        // "stamdrainmindam"), the list is treated as absent and left untouched for whatever
+        // actually follows (this item's own trailing bits).
         // A real v99 shared-stash fixture (predating this discovery, from issue #1) breaks under
-        // that rule -- it stores bonus lists only for thresholds the lSet flags actually mark
-        // active, same as this code always assumed before now -- so the old behavior is kept for
-        // anything not confirmed to be on the current format.
+        // even the setitems.txt-driven rule -- it stores bonus lists only for thresholds the lSet
+        // flags actually mark active, same as this code always assumed before now -- so the old
+        // behavior is kept for anything not confirmed to be on the current format.
         if (quality == 5) {
             if (usesPostV99ItemFormat() && iSetItemRow != null) {
                 for (int x = 1; x <= 5; x++) {
@@ -1289,7 +1330,7 @@ public class D2Item implements Comparable, D2ItemInterface {
                             || !iSetItemRow.get("amin" + x + "b").equals("")
                             || needsStoredBaseValue(iSetItemRow.get("aprop" + x + "a"))
                             || needsStoredBaseValue(iSetItemRow.get("aprop" + x + "b"));
-                    if (rollsAValue) {
+                    if (rollsAValue && isSetBonusListPresent(pFile)) {
                         readProperties(pFile, x + 1);
                     }
                 }
