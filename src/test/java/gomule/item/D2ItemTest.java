@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 import randall.d2files.D2TxtFile;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 
 public class D2ItemTest {
 
@@ -49,7 +50,14 @@ public class D2ItemTest {
                 "All Stats +5\n" +
                 "All Resistances +26\n";
         byte[] bytes = {16, 0, -128, 0, -115, 8, -32, 89, 24, -114, 8, -3, -47, -82, 55, 32, 2, -128, -110, 0, 37, 1, -91, 1, -91, 19, -30, 82, -120, 91, 33, -82, -123, -72, 63, -6, 15};
-        runItemDumpComparison(expected, loadD2Item(bytes));
+        D2Item d2Item = loadD2Item(bytes);
+        runItemDumpComparison(expected, d2Item);
+
+        // getUniqueID(): the accessor added for gomule.grail.D2GrailScanner -- Mara's
+        // Kaleidoscope is uniqueitems.txt *ID 272.
+        assertEquals(272, d2Item.getUniqueID());
+        // getRuneWordIndex(): null for any non-runeword item, unique or otherwise.
+        assertNull(d2Item.getRuneWordIndex());
     }
 
     @Test
@@ -436,7 +444,13 @@ public class D2ItemTest {
                 "Weapons: Armor: Damage Reduced by 7\n" +
                 "Shields: Damage Reduced by 7\n";
         byte[] bytes = decode("10 08 80 04 05 00 D4 92 D4 1E 4F 6A 8C AA 02 BA 1A 10 50 44 98 FF 10 98 90 98 C6 83 A0 84 67 F2 FC 07 10 00 A0 00 35 00 E0 7C B6 01 10 00 A0 00 35 04 E0 7C F6 01 10 00 A0 00 35 08 E0 7C 98 00 10");
-        runItemDumpComparison(expected, loadD2Item(bytes));
+        D2Item d2Item = loadD2Item(bytes);
+        runItemDumpComparison(expected, d2Item);
+
+        // getRuneWordIndex(): the accessor added for gomule.grail.D2GrailScanner. "Bulwark" is
+        // runes.txt's own "Name" column for Shael+Io+Sol -- the identity iItemName loses once it
+        // gets overwritten with the (here identical) translated display name.
+        assertEquals("Bulwark", d2Item.getRuneWordIndex());
     }
 
 //    @Test

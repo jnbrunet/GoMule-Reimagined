@@ -84,6 +84,10 @@ public class D2FileManager extends JFrame {
     private D2ViewProject iViewProject;
     private D2ViewClipboard iClipboard;
     private D2ViewStash iViewAll;
+    // The single (at most one, per getFileName()'s dedup) open Holy Grail window, if any. Tracked
+    // the same way iViewAll is, so addItemList()/removeItemList() below can push it a fresh
+    // snapshot of every open file whenever one opens or closes -- see D2ViewGrail.refreshLists().
+    private D2ViewGrail iGrailView;
     private boolean iIgnoreCheckAll = false;
     //	private JMenuBar D2JMenu;
     //	private JMenu file;
@@ -789,6 +793,7 @@ public class D2FileManager extends JFrame {
         JMenuItem newStash = new JMenuItem("New Stash");
         JMenuItem openStash = new JMenuItem("Open Stash");
         JMenuItem saveAll = new JMenuItem("Save All");
+        JMenuItem openGrail = new JMenuItem("Holy Grail");
         JMenu switchLookAndFeelMenu = new JMenu("Switch Appearance");
         for (LookAndFeelOptions lookAndFeelOption : LookAndFeelOptions.values()) {
             JMenuItem menuItem = new JMenuItem(lookAndFeelOption.getNameString());
@@ -824,6 +829,8 @@ public class D2FileManager extends JFrame {
         fileMenu.add(openStash);
         fileMenu.addSeparator();
         fileMenu.add(saveAll);
+        fileMenu.addSeparator();
+        fileMenu.add(openGrail);
         fileMenu.addSeparator();
         fileMenu.add(switchLookAndFeelMenu);
         fileMenu.addSeparator();
@@ -875,6 +882,13 @@ public class D2FileManager extends JFrame {
 
             public void mouseReleased(MouseEvent e) {
                 saveAll();
+            }
+        });
+
+        openGrail.addMouseListener(new MouseAdapter() {
+
+            public void mouseReleased(MouseEvent e) {
+                openGrailWindow();
             }
         });
 
@@ -1038,6 +1052,16 @@ public class D2FileManager extends JFrame {
         rearrangeWindows.addActionListener(e -> rearrangeWindows());
         iToolbar.addSeparator();
         iToolbar.add(rearrangeWindows);
+
+        iToolbar.addSeparator();
+
+        // No dedicated icon asset exists for this yet (unlike the other toolbar buttons, which all
+        // have one under resources/icons), so this is a plain text button rather than introducing
+        // a new binary asset just for this.
+        JButton lHolyGrail = new JButton("Holy Grail");
+        lHolyGrail.setToolTipText("<html><font color=white>Open the Holy Grail window</font></html>");
+        lHolyGrail.addActionListener(e -> openGrailWindow());
+        iToolbar.add(lHolyGrail);
 
         iToolbar.addSeparator();
 
@@ -1500,6 +1524,9 @@ public class D2FileManager extends JFrame {
         if (pContainer.getFileName().equalsIgnoreCase("all")) {
             iViewAll = (D2ViewStash) pContainer;
         }
+        if (pContainer instanceof D2ViewGrail) {
+            iGrailView = (D2ViewGrail) pContainer;
+        }
     }
 
     public void removeFromOpenWindows(D2ItemContainer pContainer) {
@@ -1510,6 +1537,9 @@ public class D2FileManager extends JFrame {
 
         if (pContainer.getFileName().equalsIgnoreCase("all")) {
             iViewAll = null;
+        }
+        if (pContainer instanceof D2ViewGrail) {
+            iGrailView = null;
         }
 
         //		System.gc();
@@ -1748,6 +1778,14 @@ public class D2FileManager extends JFrame {
             lList.addD2ItemListListener(TITLE_SETTING_LIST_LISTENER);
         }
 
+        // A new file may just have become open (or an "all" pseudo-list rebuilt) -- a live Holy
+        // Grail window needs to know so it can subscribe to it and rescan. Harmless to call this
+        // even when pFileName was already open (the view only actually (re)subscribes to lists it
+        // isn't already listening to -- see D2ViewGrail.refreshLists()).
+        if (iGrailView != null) {
+            iGrailView.refreshLists();
+        }
+
         return lList;
     }
 
@@ -1778,7 +1816,76 @@ public class D2FileManager extends JFrame {
             System.err.println("Remove file: " + pFileName);
             iItemLists.remove(pFileName);
             iViewProject.notifyItemListClosed(pFileName);
+            // The set of open files just shrank -- a live Holy Grail window needs to drop its
+            // subscription to this list (and rescan) or it would keep reporting items from a file
+            // that is no longer open. See D2ViewGrail.refreshLists().
+            if (iGrailView != null) {
+                iGrailView.refreshLists();
+            }
         }
+    }
+
+    /**
+     * A defensive-copy snapshot of every currently open .d2s/.d2x/.d2i list, keyed by nothing (the
+     * caller only ever needs the values) -- what D2GrailScanner scans. Deliberately NOT
+     * D2ItemListAll: that class only aggregates getCharList()/getStashList() (D2ItemListAll.java),
+     * so .d2i shared stashes are invisible to it, and the Holy Grail window explicitly must not
+     * miss those (plan section 6.1).
+     */
+    @SuppressWarnings("unchecked")
+    public java.util.Collection<D2ItemList> getOpenItemLists() {
+        return new ArrayList<D2ItemList>(iItemLists.values());
+    }
+
+    /**
+     * The Holy Grail window's "Include non-Chronicle items" checkbox state, persisted the same way
+     * the look-and-feel choice is (FileManagerProperties / projects/projects.properties) so it
+     * survives closing and reopening the window. D2FileManager is the sole owner of iProperties,
+     * so the view asks here rather than touching FileManagerProperties directly.
+     */
+    public boolean isGrailIncludeNonChronicle() {
+        return iProperties != null
+                && Boolean.parseBoolean(iProperties.getProperty("grail-include-non-chronicle", "false"));
+    }
+
+    public void setGrailIncludeNonChronicle(boolean pValue) {
+        if (iProperties == null) {
+            return;
+        }
+        iProperties.setProperty("grail-include-non-chronicle", String.valueOf(pValue));
+        FileManagerProperties.saveFileManagerProperties(iProperties);
+    }
+
+    /**
+     * Opens the (singleton) Holy Grail window, or brings the existing one to front if it is
+     * already open -- mirrors openChar()/openStash()'s "already open" dedup, keyed here on
+     * D2ViewGrail's fixed getFileName() instead of a real file name.
+     */
+    /**
+     * Brings the open window for pFileName to the front, if one is currently open -- used by
+     * D2ViewGrail's double-click-to-focus-source-file (plan section 3.3/7). A no-op if that file
+     * isn't open any more (it may have been closed since the grail entry was found); the caller
+     * doesn't need to check first.
+     */
+    public void focusFileWindow(String pFileName) {
+        for (int i = 0; i < iOpenWindows.size(); i++) {
+            D2ItemContainer lContainer = (D2ItemContainer) iOpenWindows.get(i);
+            if (lContainer.getFileName().equalsIgnoreCase(pFileName)) {
+                internalWindowForward((JInternalFrame) lContainer);
+                return;
+            }
+        }
+    }
+
+    public void openGrailWindow() {
+        if (iGrailView != null) {
+            internalWindowForward(iGrailView);
+            return;
+        }
+        D2ViewGrail lView = new D2ViewGrail(this);
+        lView.setLocation(10 + (iOpenWindows.size() * 10), 10 + (iOpenWindows.size() * 10));
+        addToOpenWindows(lView);
+        internalWindowForward(lView);
     }
 
     public void workCursor() {

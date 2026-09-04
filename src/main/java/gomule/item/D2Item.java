@@ -155,6 +155,16 @@ public class D2Item implements Comparable, D2ItemInterface {
 
     private short unique_id = -1;
 
+    // The runes.txt "Name" column of the runeword this item resolved to (e.g. "Insight"),
+    // captured at the point readExtend2() already has that row in hand -- see the assignment
+    // near "if (iRuneWord)" below. iItemName is overwritten with the translated display name
+    // right after, which loses the original runes.txt identity; this field is what lets the
+    // Holy Grail scanner (gomule.grail.D2GrailScanner) identify a runeword by its real key
+    // instead of re-deriving it from the socketed runes' codes a second time. Null for any
+    // non-runeword item. No bit-level read is involved: this is a plain field assignment inside
+    // an already-executing "if (lRuneWord != null)" branch.
+    private String iRuneWordIndex;
+
     private final HuffmanLookupTable huffmanLookupTable = HuffmanLookupTable.withStandardDictionary();
 
     // The .d2s/.d2i item-format gained an extra bit before the magical property list (and
@@ -529,6 +539,9 @@ public class D2Item implements Comparable, D2ItemInterface {
             if (lRuneWord != null) {
                 String lookedUpName = D2Files.getInstance().getTranslations().getTranslation(lRuneWord.get("Name"));
                 iItemName = lookedUpName == null ? lRuneWord.get("*Rune Name") : lookedUpName;
+                // Keep the runes.txt row's own identity before iItemName above overwrites it with
+                // the (translated) display name -- see the iRuneWordIndex field comment.
+                iRuneWordIndex = lRuneWord.get("Name");
             }
         }
 
@@ -1835,6 +1848,18 @@ public class D2Item implements Comparable, D2ItemInterface {
 
     public short getSetID() {
         return set_id;
+    }
+
+    public short getUniqueID() {
+        return unique_id;
+    }
+
+    /**
+     * The runes.txt "Name" column of this item's resolved runeword (e.g. "Insight"), or null if
+     * this item is not a runeword (isRuneWord() false) or the runeword lookup found no match.
+     */
+    public String getRuneWordIndex() {
+        return iRuneWordIndex;
     }
 
     public String get_version() {
