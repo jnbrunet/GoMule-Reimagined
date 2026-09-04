@@ -43,7 +43,7 @@ public class D2StashTest {
         D2Item oakheart = ((List<D2Item>) stash.getItemList()).stream()
                 .filter(i -> "Oakheart".equals(i.getItemName()))
                 .findFirst()
-                .orElseThrow();
+                .orElseThrow(() -> new AssertionError("Oakheart not found"));
         byte[] itemBytes = oakheart.get_bytes();
 
         File tempFile = File.createTempFile("clipboard", ".d2x");
