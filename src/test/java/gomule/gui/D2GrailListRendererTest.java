@@ -155,7 +155,10 @@ public class D2GrailListRendererTest {
         // only the FULLSET-dependent sections are affected by the unresolvable set name.
         assertTrue(lTooltip.contains("Attack Rating"), "the item's own prop1 (att) should still render");
         assertTrue(lTooltip.contains("Set (2 items):"), "the item's own aprop1a still renders with no FULLSET row");
-        assertFalse(lTooltip.contains("Dexterity"), "Angelic Raiment's PCode2a can't appear without a FULLSET row");
+        // "+10 to Dexterity" specifically (Angelic Raiment's PCode2a) -- not the bare substring
+        // "Dexterity", which now also appears legitimately in this item's own "Required Dexterity:
+        // 25" base-stat line (a change unrelated to the set-bonus machinery this test targets).
+        assertFalse(lTooltip.contains("+10 to Dexterity"), "Angelic Raiment's PCode2a can't appear without a FULLSET row");
         assertFalse(lTooltip.contains("Full Set Bonus"), "no full-set section without a resolvable set row");
     }
 
@@ -183,6 +186,91 @@ public class D2GrailListRendererTest {
         assertNotNull(lTooltip);
         assertFalse(lTooltip.isEmpty());
         assertTrue(lTooltip.contains("Harlequin Crest"));
+    }
+
+    /**
+     * A missing ARMOR unique: "Harlequin Crest" (base code "uap" = "Shako", armor.txt). Verified by
+     * hand against armor.txt's real "Shako" row: minac=98, maxac=141 (-> "Defense: 98 - 141"),
+     * block=0 (a helm, not a shield -- no "Chance to Block" line), durability=12/nodurability=0
+     * (-> "Durability: 12"), reqstr=50 (-> "Required Strength: 50"), reqdex=0 (omitted),
+     * levelreq=43 -- but overridden by uniqueitems.txt's OWN "lvl req"=62 for this unique
+     * (-> "Required Level: 62", not 43).
+     */
+    @Test
+    public void missingArmorUniqueTooltipShowsDefenseRangeAndRequirements() {
+        D2TxtFile.constructTxtFiles("./d2111");
+        D2GrailEntry lHarlequinCrest = findByDisplayName("Harlequin Crest");
+        String lTooltip = D2GrailListRenderer.tooltipFor(rowOf(lHarlequinCrest, null), null);
+
+        assertTrue(lTooltip.contains("Defense: 98 - 141"), lTooltip);
+        assertFalse(lTooltip.contains("Chance to Block"), "Shako is a helm, not a shield: " + lTooltip);
+        assertTrue(lTooltip.contains("Durability: 12"), lTooltip);
+        assertTrue(lTooltip.contains("Required Level: 62"), "unique's own lvl req (62) must win over the base's (43): " + lTooltip);
+        assertTrue(lTooltip.contains("Required Strength: 50"), lTooltip);
+        assertFalse(lTooltip.contains("Required Dexterity"), "Shako's reqdex is 0, must be omitted: " + lTooltip);
+    }
+
+    /**
+     * A missing WEAPON unique: "Hand of Blessed Light" (base code "9ws" = "Divine Scepter",
+     * weapons.txt). Verified by hand against weapons.txt's real "Divine Scepter" row: mindam=16,
+     * maxdam=38, both "1or2handed" and "2handed" blank (-> one-hand-only "One Hand Damage: 16 -
+     * 38"), durability=250, reqstr=103, reqdex blank (omitted), levelreq=25 -- but overridden by
+     * uniqueitems.txt's OWN "lvl req"=55 for this unique (-> "Required Level: 55", not 25).
+     */
+    @Test
+    public void missingWeaponUniqueTooltipShowsDamage() {
+        D2TxtFile.constructTxtFiles("./d2111");
+        D2GrailEntry lHandOfBlessedLight = findByDisplayName("Hand of Blessed Light");
+        String lTooltip = D2GrailListRenderer.tooltipFor(rowOf(lHandOfBlessedLight, null), null);
+
+        assertTrue(lTooltip.contains("One Hand Damage: 16 - 38"), lTooltip);
+        assertFalse(lTooltip.contains("Two Hand Damage"), "not 2handed/1or2handed: " + lTooltip);
+        assertTrue(lTooltip.contains("Durability: 250"), lTooltip);
+        assertTrue(lTooltip.contains("Required Level: 55"), "unique's own lvl req (55) must win over the base's (25): " + lTooltip);
+        assertTrue(lTooltip.contains("Required Strength: 103"), lTooltip);
+        assertFalse(lTooltip.contains("Required Dexterity"), lTooltip);
+    }
+
+    /**
+     * armor.txt itself carries an always-zero "mindam"/"maxdam" pair on every row (confirmed
+     * against "Shako": mindam=0, maxdam=0) -- the regression pin for a real bug caught while
+     * writing this feature: naively rendering weapon columns off ANY base row (rather than only one
+     * that actually came from weapons.txt, checked via D2TxtFileItemProperties.getFileName()) would
+     * print a bogus "One Hand Damage: 0 - 0" on every single piece of armor.
+     */
+    @Test
+    public void missingArmorTooltipNeverShowsPhantomZeroDamage() {
+        D2TxtFile.constructTxtFiles("./d2111");
+        D2GrailEntry lHarlequinCrest = findByDisplayName("Harlequin Crest");
+        String lTooltip = D2GrailListRenderer.tooltipFor(rowOf(lHarlequinCrest, null), null);
+        assertFalse(lTooltip.contains("Damage: 0 - 0"), lTooltip);
+        assertFalse(lTooltip.toLowerCase(java.util.Locale.ROOT).contains("hand damage"), lTooltip);
+    }
+
+    /**
+     * A base code that resolves to no row at all (a future mod entry, or bad data) must still
+     * render the entry's name and its own properties -- the missing base-stats section simply
+     * contributes nothing, rather than the D2TxtFile.search() failure taking the whole tooltip down.
+     */
+    @Test
+    public void missingEntryWithUnresolvableBaseCodeStillRendersNameAndProperties() {
+        D2TxtFile.constructTxtFiles("./d2111");
+        D2GrailEntry lHarlequinCrest = findByDisplayName("Harlequin Crest");
+        D2GrailEntry lWithUnknownBaseCode = new D2GrailEntry(
+                lHarlequinCrest.getKey(), lHarlequinCrest.getDisplayName(), "zzznotarealcode",
+                lHarlequinCrest.getBaseItemName(), lHarlequinCrest.getTier(), lHarlequinCrest.getUiCategoryCode(),
+                lHarlequinCrest.getUiCategoryLabel(), lHarlequinCrest.getRootGroup(), null, 0, null, null,
+                lHarlequinCrest.getInvfile(), lHarlequinCrest.isChronicle(), lHarlequinCrest.getSourceRow());
+
+        String lTooltip = D2GrailListRenderer.tooltipFor(rowOf(lWithUnknownBaseCode, null), null);
+
+        assertNotNull(lTooltip);
+        assertTrue(lTooltip.contains("Harlequin Crest"));
+        assertTrue(lTooltip.toLowerCase(java.util.Locale.ROOT).contains("skill"),
+                "the entry's own properties (from its real source row) should still render: " + lTooltip);
+        assertFalse(lTooltip.contains("Defense"), "no base row means no base stats at all: " + lTooltip);
+        assertFalse(lTooltip.contains("Required Level"), lTooltip);
+        assertFalse(lTooltip.contains("Required Strength"), lTooltip);
     }
 
     private static D2GrailModel.Row rowOf(D2GrailEntry pEntry, Object pUnusedFinding) {

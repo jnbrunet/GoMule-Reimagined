@@ -48,6 +48,15 @@ public class D2GrailListRenderer extends JLabel implements ListCellRenderer<Obje
     private static final Color SET_COLOR = Color.green.darker();
     private static final Color MISSING_COLOR = Color.GRAY;
 
+    // No real character to ask for a level (a missing entry has never been found), so every
+    // per-level property in this tooltip is displayed as if a level-99 character owned it -- a
+    // generous default rather than a misleadingly low one. Used for BOTH D2PropCollection.applyOp()
+    // (below) and generateDisplay()'s own cLvl parameter, even though generateDisplay() does not
+    // actually use it (D2Prop.generateDisplay's cLvl argument is dead -- the real scaling happens
+    // in applyOp(), called separately -- see the field's use sites for the full story); kept in
+    // sync anyway since a future change to generateDisplay might start using it.
+    private static final int ASSUMED_CHARACTER_LEVEL = 99;
+
     public D2GrailListRenderer() {
         setOpaque(true);
         setIconTextGap(8);
@@ -296,6 +305,8 @@ public class D2GrailListRenderer extends JLabel implements ListCellRenderer<Obje
             lHtml.append(escapeHtml(lTierLabel)).append("<br>&#10;");
         }
 
+        appendMissingBaseStats(lHtml, pEntry);
+
         D2TxtFileItemProperties lRow = pEntry.getSourceRow();
         if (lRow != null) {
             int lMaxPropSlots = pEntry.getKey().getType() == D2GrailKey.Type.SET ? 9 : 12;
@@ -318,10 +329,19 @@ public class D2GrailListRenderer extends JLabel implements ListCellRenderer<Obje
                 }
             }
             lProps.tidy();
-            // No real character to ask for a level (this entry has never been found), so this
-            // uses a generous default (99) for any level-scaled property display rather than a
-            // misleadingly low one.
-            lHtml.append(lProps.generateDisplay(0, 99));
+            // The actual per-level scaling (e.g. uniqueitems.txt "hp/lvl" par=12 -> "+12 to Life
+            // (Based on Character Level)" becoming a real "+127" at level 85) happens here, not in
+            // generateDisplay(): D2Prop.applyOp() is what multiplies by character level and divides
+            // by the stat's own itemstatcost.txt divisor -- D2Item.java calls this once on every
+            // real item's iProps (applyItemMods()) right after all its properties are read, which
+            // this tooltip has no equivalent construction step to inherit, so it is called
+            // explicitly here instead. Confirmed to reproduce the real game's own math exactly
+            // against a found item: charFiles/pally9.d2s's real "Cleglaw's Pincers" (level-85
+            // character) renders its bitstream-read att/lvl bonus as "+850"; feeding that same
+            // stat's raw table value (par=20) through propToStat + applyOp(85) produces the
+            // identical "+850 to Attack Rating (Based on Character Level)".
+            lProps.applyOp(ASSUMED_CHARACTER_LEVEL);
+            lHtml.append(lProps.generateDisplay(0, ASSUMED_CHARACTER_LEVEL));
         }
 
         if (pEntry.getKey().getType() == D2GrailKey.Type.SET) {
@@ -330,6 +350,248 @@ public class D2GrailListRenderer extends JLabel implements ListCellRenderer<Obje
 
         lHtml.append("</center></html>");
         return lHtml.toString();
+    }
+
+    /**
+     * A found item's tooltip shows its own base statistics (defense, damage, durability,
+     * requirements) straight from the real, rolled D2Item -- see
+     * D2ItemRenderer.generatePropStringNoHtmlTags. A missing entry has no rolled instance, only its
+     * base item's misc.txt/armor.txt/weapons.txt row (D2TxtFile.search(baseCode)), so this shows
+     * the base RANGE instead of a single rolled number (e.g. "Defense: 10 - 14", not one number a
+     * specific drop might roll) -- exactly what there IS to show for something never found.
+     * <p>
+     * A runeword has no single base item (its allowed bases are itype1..itype6, a list, not one
+     * row) and is skipped entirely rather than guessing at one. Every line degrades independently:
+     * a missing base row, or one column that is empty/non-numeric, drops only that line, never the
+     * rest of the tooltip -- the same stance as every other piece of this tooltip.
+     */
+    private static void appendMissingBaseStats(StringBuilder pHtml, D2GrailEntry pEntry) {
+        if (pEntry.getKey().getType() == D2GrailKey.Type.RUNEWORD) {
+            return;
+        }
+
+        String lBaseCode = pEntry.getBaseItemCode();
+        if (lBaseCode == null || lBaseCode.isEmpty()) {
+            // The ~10 real "reserved unique slot" entries with no base code at all (e.g. "Gore
+            // Ripper") -- D2TxtFile.search("") could in principle match some unrelated row with a
+            // blank "code" column, so this is skipped explicitly rather than risking that.
+            return;
+        }
+
+        D2TxtFileItemProperties lBaseRow;
+        try {
+            lBaseRow = D2TxtFile.search(lBaseCode);
+        } catch (RuntimeException pEx) {
+            lBaseRow = null;
+        }
+        if (lBaseRow == null) {
+            return;
+        }
+
+        // Which of armor.txt/weapons.txt/misc.txt the row actually came from -- D2Item.java's own
+        // isTypeArmor()/isTypeWeapon() are set the exact same way (readExtend: "armor".equals(
+        // iItemType.getFileName())/"weapons".equals(...)). This is NOT the same as checking whether
+        // "minac"/"mindam" happen to be non-empty: armor.txt carries its own always-zero "mindam"/
+        // "maxdam" pair on every row (confirmed against "Shako"/uap: mindam=0, maxdam=0), which
+        // would otherwise render a bogus "One Hand Damage: 0 - 0" on every piece of armor.
+        String lTable = lBaseRow.getFileName();
+        boolean lIsArmor = "armor".equals(lTable);
+        boolean lIsWeapon = "weapons".equals(lTable);
+
+        if (lIsArmor) {
+            try {
+                appendArmorStats(pHtml, lBaseRow);
+            } catch (RuntimeException pEx) {
+                // A broken armor column must not block durability/requirements below.
+            }
+        }
+        if (lIsWeapon) {
+            try {
+                appendWeaponStats(pHtml, lBaseRow);
+            } catch (RuntimeException pEx) {
+                // Ditto for a broken weapon column.
+            }
+        }
+        try {
+            appendDurability(pHtml, lBaseRow);
+        } catch (RuntimeException pEx) {
+            // Ditto for durability.
+        }
+        try {
+            Integer lReqLevel = requiredLevel(pEntry, lBaseRow);
+            if (lReqLevel != null) {
+                pHtml.append("Required Level: ").append(lReqLevel).append("<br>&#10;");
+            }
+        } catch (RuntimeException pEx) {
+            // Ditto for the required-level precedence lookup below.
+        }
+        try {
+            Integer lReqStr = getReq(lBaseRow.get("reqstr"));
+            if (lReqStr != null) {
+                pHtml.append("Required Strength: ").append(lReqStr).append("<br>&#10;");
+            }
+        } catch (RuntimeException pEx) {
+            // Ditto.
+        }
+        try {
+            Integer lReqDex = getReq(lBaseRow.get("reqdex"));
+            if (lReqDex != null) {
+                pHtml.append("Required Dexterity: ").append(lReqDex).append("<br>&#10;");
+            }
+        } catch (RuntimeException pEx) {
+            // Ditto.
+        }
+    }
+
+    /**
+     * Defense range ("Defense: 10 - 14", or a single number when armor.txt's "minac" equals
+     * "maxac") plus "Chance to Block: " when armor.txt's own "block" column is populated (shields
+     * only, in practice). A weapon/misc base simply has neither column, so this contributes nothing
+     * for those -- no table lookup needed to tell them apart.
+     */
+    private static void appendArmorStats(StringBuilder pHtml, D2TxtFileItemProperties pRow) {
+        Integer lMinAc = parseIntOrNull(pRow.get("minac"));
+        Integer lMaxAc = parseIntOrNull(pRow.get("maxac"));
+        if (lMinAc != null || lMaxAc != null) {
+            pHtml.append("Defense: ");
+            if (lMinAc != null && lMaxAc != null && !lMinAc.equals(lMaxAc)) {
+                pHtml.append(lMinAc).append(" - ").append(lMaxAc);
+            } else {
+                pHtml.append(lMinAc != null ? lMinAc : lMaxAc);
+            }
+            pHtml.append("<br>&#10;");
+        }
+
+        // getReq()'s "blank or 0 means absent" semantics, not a plain non-empty check: every
+        // non-shield armor row (e.g. helms) still has a real "block" column, just always "0" --
+        // D2ItemRenderer only ever shows this line for an actual shield (isShield()), and "0" is
+        // exactly how a non-shield row spells "not a shield" here.
+        Integer lBlock = getReq(pRow.get("block"));
+        if (lBlock != null) {
+            pHtml.append("Chance to Block: ").append(lBlock).append("<br>&#10;");
+        }
+    }
+
+    /**
+     * Damage ranges, mirroring D2ItemRenderer's own hand logic (generatePropStringNoHtmlTags) but
+     * driven by weapons.txt column presence instead of a parsed item's iWhichHand/isiThrow(): a
+     * javelin's "minmisdam"/"maxmisdam" are simply populated alongside plain "mindam"/"maxdam" (and
+     * its "1or2handed"/"2handed" are both blank), so checking "are these columns present" instead
+     * of first classifying the weapon by type code reproduces the same "Throw Damage: " + "One Hand
+     * Damage: " pairing for a throwable without needing to know it is one.
+     * <p>
+     * "2handed"=1 (two-hand ONLY) weapons store their real numbers in "2handmindam"/"2handmaxdam",
+     * not "mindam"/"maxdam" -- confirmed against D2Item.java's own readExtend2, which loads exactly
+     * that column pair into the value it renders as "Two Hand Damage: " for this case.
+     */
+    private static void appendWeaponStats(StringBuilder pHtml, D2TxtFileItemProperties pRow) {
+        appendDamageRange(pHtml, "Throw Damage: ", parseIntOrNull(pRow.get("minmisdam")), parseIntOrNull(pRow.get("maxmisdam")));
+
+        if ("1".equals(pRow.get("1or2handed"))) {
+            appendDamageRange(pHtml, "One Hand Damage: ", parseIntOrNull(pRow.get("mindam")), parseIntOrNull(pRow.get("maxdam")));
+            appendDamageRange(pHtml, "Two Hand Damage: ", parseIntOrNull(pRow.get("2handmindam")), parseIntOrNull(pRow.get("2handmaxdam")));
+        } else if ("1".equals(pRow.get("2handed"))) {
+            appendDamageRange(pHtml, "Two Hand Damage: ", parseIntOrNull(pRow.get("2handmindam")), parseIntOrNull(pRow.get("2handmaxdam")));
+        } else {
+            appendDamageRange(pHtml, "One Hand Damage: ", parseIntOrNull(pRow.get("mindam")), parseIntOrNull(pRow.get("maxdam")));
+        }
+    }
+
+    private static void appendDamageRange(StringBuilder pHtml, String pLabel, Integer pMin, Integer pMax) {
+        if (pMin == null && pMax == null) {
+            return;
+        }
+        pHtml.append(pLabel);
+        if (pMin != null && pMax != null) {
+            pHtml.append(pMin).append(" - ").append(pMax);
+        } else {
+            pHtml.append(pMin != null ? pMin : pMax);
+        }
+        pHtml.append("<br>&#10;");
+    }
+
+    /**
+     * The base maximum durability, or "Indestructible" when "nodurability" is set -- never a
+     * "current of max" figure, since a missing entry has no instance to have taken wear on.
+     */
+    private static void appendDurability(StringBuilder pHtml, D2TxtFileItemProperties pRow) {
+        if ("1".equals(pRow.get("nodurability"))) {
+            pHtml.append("Indestructible<br>&#10;");
+            return;
+        }
+        Integer lDurability = parseIntOrNull(pRow.get("durability"));
+        if (lDurability != null) {
+            pHtml.append("Durability: ").append(lDurability).append("<br>&#10;");
+        }
+    }
+
+    /**
+     * Required Level is NOT simply the base row's own "levelreq" -- D2Item.java raises it from the
+     * unique/set row at parse time (readExtend, cases 7 and 5 respectively), and a missing entry's
+     * tooltip must mirror that precedence or it understates what the item actually requires:
+     * <ul>
+     *   <li>Unique: the unique's own "lvl req" column always wins over the base's "levelreq" when
+     *   it parses to a real requirement (D2Item.java's own check, "lUnique.get(code).equals(
+     *   item_type)", is trivially true here -- pEntry's base code IS that unique row's own "code"
+     *   column, by construction).</li>
+     *   <li>Set item: the set item's own "lvl req" wins over the base's "levelreq" only when it is
+     *   HIGHER (D2Item.java: "lSetReq != -1 && lSetReq > iReqLvl") -- a set piece is never required
+     *   at a LOWER level than its own base item would otherwise demand.</li>
+     * </ul>
+     */
+    private static Integer requiredLevel(D2GrailEntry pEntry, D2TxtFileItemProperties pBaseRow) {
+        Integer lBaseLevel = getReq(pBaseRow.get("levelreq"));
+        D2TxtFileItemProperties lSourceRow = pEntry.getSourceRow();
+        if (lSourceRow == null) {
+            return lBaseLevel;
+        }
+
+        if (pEntry.getKey().getType() == D2GrailKey.Type.UNIQUE) {
+            Integer lUniqueLevel = getReq(lSourceRow.get("lvl req"));
+            return lUniqueLevel != null ? lUniqueLevel : lBaseLevel;
+        }
+        if (pEntry.getKey().getType() == D2GrailKey.Type.SET) {
+            Integer lSetLevel = getReq(lSourceRow.get("lvl req"));
+            if (lSetLevel != null && (lBaseLevel == null || lSetLevel > lBaseLevel)) {
+                return lSetLevel;
+            }
+            return lBaseLevel;
+        }
+        return lBaseLevel;
+    }
+
+    /**
+     * D2Item.getReq()'s exact semantics, reproduced here for a missing entry with no D2Item to ask:
+     * blank, "0" and anything non-numeric all mean "no requirement" (null), never a rendered "0".
+     */
+    private static Integer getReq(String pValue) {
+        if (pValue == null) {
+            return null;
+        }
+        String lTrimmed = pValue.trim();
+        if (lTrimmed.isEmpty() || "0".equals(lTrimmed)) {
+            return null;
+        }
+        try {
+            return Integer.parseInt(lTrimmed);
+        } catch (NumberFormatException pEx) {
+            return null;
+        }
+    }
+
+    private static Integer parseIntOrNull(String pValue) {
+        if (pValue == null) {
+            return null;
+        }
+        String lTrimmed = pValue.trim();
+        if (lTrimmed.isEmpty()) {
+            return null;
+        }
+        try {
+            return Integer.parseInt(lTrimmed);
+        } catch (NumberFormatException pEx) {
+            return null;
+        }
     }
 
     /**
@@ -388,8 +650,12 @@ public class D2GrailListRenderer extends JLabel implements ListCellRenderer<Obje
                 continue;
             }
             lThresholdProps.tidy();
+            // See ASSUMED_CHARACTER_LEVEL's javadoc: applyOp() is what actually does the per-level
+            // math (e.g. Cleglaw's Pincers' aprop1a "att/lvl" par=20 -> "+850" at level 85) --
+            // generateDisplay() alone never scales anything by level.
+            lThresholdProps.applyOp(ASSUMED_CHARACTER_LEVEL);
             pHtml.append("<font color='red'>Set (").append(lThreshold).append(" items): </font>")
-                    .append(lThresholdProps.generateDisplay(0, 99));
+                    .append(lThresholdProps.generateDisplay(0, ASSUMED_CHARACTER_LEVEL));
         }
 
         if (lFullSetRow != null) {
@@ -399,7 +665,9 @@ public class D2GrailListRenderer extends JLabel implements ListCellRenderer<Obje
             }
             if (!lFullSetProps.isEmpty()) {
                 lFullSetProps.tidy();
-                pHtml.append("<font color='red'>Full Set Bonus: </font>").append(lFullSetProps.generateDisplay(0, 99));
+                lFullSetProps.applyOp(ASSUMED_CHARACTER_LEVEL);
+                pHtml.append("<font color='red'>Full Set Bonus: </font>")
+                        .append(lFullSetProps.generateDisplay(0, ASSUMED_CHARACTER_LEVEL));
             }
         }
     }
