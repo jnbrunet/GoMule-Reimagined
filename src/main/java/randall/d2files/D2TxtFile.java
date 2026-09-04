@@ -174,7 +174,47 @@ public final class D2TxtFile {
             }
             ;
 
-            if (propsStatCode.indexOf("max") != -1) {
+            if (propsStatCode.endsWith("_perlevel") && pMin.equals("") && pMax.equals("")) {
+                // A per-level property (properties.txt code ends in "/lvl", resolving to an
+                // itemstatcost.txt "item_*_perlevel" stat -- e.g. "hp/lvl" -> "item_hp_perlevel",
+                // "att/lvl" -> "item_tohit_perlevel") whose min/max are both blank stores its
+                // fixed value in "par" instead -- confirmed against real data: uniqueitems.txt's
+                // Harlequin Crest has prop2="hp/lvl" min="" max="" par="12", and setitems.txt's
+                // Cleglaw's Pincers has aprop1a="att/lvl" min="" max="" par="20" (13 sets.txt
+                // FCode/PCode entries across ./d2111 share this exact shape -- e.g. Civerb's
+                // Vestments FCode4="att/lvl" FParam="16"). Before this, pVals[2] (par) was always
+                // zeroed out unconditionally two lines below unless the stat name contained "max"
+                // or "length", so every one of these rendered as a flat "+0" regardless of level.
+                //
+                // Checked BEFORE "max"/"length" below, not just alongside them as an else-if:
+                // seven of these per-level stats (item_maxdamage_perlevel,
+                // item_maxdamage_percent_perlevel, item_{cold,fire,ltng,pois,magic}_damagemax_
+                // perlevel -- e.g. setitems.txt's real "Civerb's Cudgel", aprop1a="dmg/lvl"
+                // apar1a="12" amin1a="" amax1a="") happen to contain the substring "max" in their
+                // *name* purely by coincidence of English, which used to make the (rightly still
+                // untouched) "max" branch below claim them first -- taking the blank "amax" (0)
+                // instead of "par", right back to a flat "+0". The both-blank min/max guard is what
+                // makes checking this first safe: an ordinary "max" stat (e.g. "dmg%" ->
+                // "item_maxdamage_percent") always has real min/max data, so it can never satisfy
+                // this branch's condition and falls through to the "max" branch exactly as before.
+                //
+                // No extra scaling is applied here -- this only places the right raw value where
+                // D2Prop.applyOp() (NOT generateDisplay(), whose cLvl parameter is never actually
+                // read) already knows how to divide it by the correct stat-specific divisor (2 for
+                // item_tohit_perlevel, 8 for most others including item_maxdamage_perlevel, per
+                // itemstatcost.txt's own "op"/"op param" columns) and multiply by character level
+                // -- that math was already correct for a save's bitstream-read value, since
+                // D2Item.applyItemMods() already calls applyOp() on every real item's whole
+                // property collection. Verified end to end: the real "Cleglaw's Pincers" in
+                // charFiles/pally9.d2s (a level-85 character) renders its bitstream-read att/lvl
+                // bonus as "+850" (20 * 85 / 2); feeding this same "par"=20 through propToStat,
+                // then the same tidy()/applyOp(85)/generateDisplay(0, 85) sequence a caller with no
+                // D2Item of its own has to run itself, produces the identical "+850 to Attack
+                // Rating (Based on Character Level)" -- see D2PropToStatPerLevelTest.
+                if (pVals[2] != 0) {
+                    pVals[0] = pVals[2];
+                }
+            } else if (propsStatCode.indexOf("max") != -1) {
                 pVals[0] = pVals[1];
             } else if (propsStatCode.indexOf("length") != -1) {
                 if (pVals[2] != 0) {
