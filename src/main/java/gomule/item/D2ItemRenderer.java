@@ -199,21 +199,57 @@ public class D2ItemRenderer {
             dispStr.append(iProps.generateDisplay(9, iCharLvl));
         }
         if (d2Item.getQuality() == 5) {
-            for (int x = 12; x < 17; x++) {
-                StringBuilder setBuf = iProps.generateDisplay(x, iCharLvl);
-                if (setBuf.length() > 29) {
-                    dispStr.append("<font color=\"red\">Set (").append(x - 10).append(" items): ");
-                    dispStr.append(setBuf);
-                    dispStr.append("</font>");
-                }
-            }
+            // One "Set (N items): " heading per threshold (2..6), combining THREE independent
+            // sources that all mean "the bonus you get once N pieces are worn" but live at three
+            // different qFlags:
+            //   - qFlag N       (2..6):  the ITEM's own per-threshold bonus, read from the save's
+            //                            bitstream (setitems.txt "aprop*") -- the one source that
+            //                            always had somewhere to render.
+            //   - qFlag N+10    (12..16): unused today by any known real item (nothing in this
+            //                            codebase currently tags a prop with these) -- kept only
+            //                            because some future/legacy data path might.
+            //   - qFlag N+20    (22..25, N=2..5 only -- sets.txt has no "PCode6a"): the SET's own
+            //                            partial bonus (sets.txt "PCode{N}a"). D2Item.
+            //                            addSetProperties already computes this on every set item,
+            //                            but nothing ever rendered it before this fix.
+            // These used to be two (then three) separate passes over all thresholds, each emitting
+            // its own "Set (N items):" heading -- which meant a set item with both an item-level
+            // and a set-level bonus at the SAME threshold showed "Set (2 items):" twice in a row
+            // with different content, reading like a rendering bug. One heading, one combined body,
+            // per threshold, fixes that. Not renumbered to reuse 12..16 for the set-level bonus
+            // (the "obvious" free slot) because 12..16 has meaning elsewhere -- D2Prop.addCharMods
+            // special-cases it, and D2Item's own stat-calculation filters on it -- so retagging
+            // risks silently changing computed character stats instead of just a tooltip line;
+            // addSetProperties keeps tagging 22..25 exactly as it always has.
+            //
+            // The setBuf.length() > 29 guard works because generateDisplay() always returns at
+            // least its <font>/</font> wrapper even with nothing inside -- applied to each of the
+            // three sources separately, since concatenating first would make an empty source
+            // indistinguishable from a real one only 1-2 characters long.
+            for (int n = 2; n < 7; n++) {
+                StringBuilder itemBuf = iProps.generateDisplay(n, iCharLvl);
+                StringBuilder legacyBuf = iProps.generateDisplay(n + 10, iCharLvl);
+                StringBuilder fullSetPartialBuf = n < 6 ? iProps.generateDisplay(n + 20, iCharLvl) : null;
 
-            for (int x = 2; x < 7; x++) {
-                StringBuilder setBuf = iProps.generateDisplay(x, iCharLvl);
-                if (setBuf.length() > 29) {
-                    dispStr.append("Set (").append(x).append(" items): ");
-                    dispStr.append(setBuf);
+                boolean hasItem = itemBuf.length() > 29;
+                boolean hasLegacy = legacyBuf.length() > 29;
+                boolean hasFullSetPartial = fullSetPartialBuf != null && fullSetPartialBuf.length() > 29;
+
+                if (!hasItem && !hasLegacy && !hasFullSetPartial) {
+                    continue;
                 }
+
+                dispStr.append("<font color=\"red\">Set (").append(n).append(" items): ");
+                if (hasItem) {
+                    dispStr.append(itemBuf);
+                }
+                if (hasFullSetPartial) {
+                    dispStr.append(fullSetPartialBuf);
+                }
+                if (hasLegacy) {
+                    dispStr.append(legacyBuf);
+                }
+                dispStr.append("</font>");
             }
         }
         if (d2Item.isEthereal()) {
@@ -245,6 +281,18 @@ public class D2ItemRenderer {
             StringBuilder setBuf = iProps.generateDisplay(36, iCharLvl);
             if (setBuf.length() > 33) {
                 dispStr.append(setBuf);
+            }
+
+            // The full-SET bonus (sets.txt "FCode1".."FCode8", granted once every piece is worn).
+            // D2Item.addSetProperties tags these 26; nothing above (32..36 included) ever asked for
+            // that flag, so this was silently computed and dropped on every set item -- same root
+            // cause, and same fix shape, as the 22..25 block above. "Full Set Bonus: " matches the
+            // Holy Grail's missing-item tooltip's wording for this exact section.
+            StringBuilder setBuf26 = iProps.generateDisplay(26, iCharLvl);
+            if (setBuf26.length() > 29) {
+                dispStr.append("<font color=\"red\">Full Set Bonus: ");
+                dispStr.append(setBuf26);
+                dispStr.append("</font>");
             }
         }
         return dispStr;

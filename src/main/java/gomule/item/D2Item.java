@@ -1135,6 +1135,14 @@ public class D2Item implements Comparable, D2ItemInterface {
     }
 
     private void addSetProperties(D2TxtFileItemProperties fullsetRow) {
+        // The caller (readExtend, "case 5") passes FULLSET.searchColumns("index", lSet.get("set"))
+        // straight through with no null check -- a set item whose "set" name has no matching
+        // sets.txt row (bad/newer-mod data) would NPE the whole item load right here. Not a
+        // bit-level read, so safe to guard: this item simply gets no set-wide bonuses (its own
+        // per-piece properties, read earlier, are unaffected), rather than the load aborting.
+        if (fullsetRow == null) {
+            return;
+        }
 
         for (int x = 2; x < 6; x++) {
             if (fullsetRow.get("PCode" + x + "a").equals("")) continue;

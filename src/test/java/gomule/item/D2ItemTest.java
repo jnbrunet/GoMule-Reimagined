@@ -8,6 +8,7 @@ import randall.d2files.D2TxtFile;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public class D2ItemTest {
 
@@ -60,6 +61,24 @@ public class D2ItemTest {
         assertNull(d2Item.getRuneWordIndex());
     }
 
+    // Aldur's Advance (Aldur's Watchtower set boots). One heading per threshold now: the item's
+    // own per-threshold bonus (bitstream-read, qFlag 2..6 -- unaffected by this change, same
+    // "+15 to Dexterity" every time this fixture's fixed byte array always rolled) and the SET's
+    // own partial bonus for that same threshold (sets.txt "PCode{N}a", qFlag 22..25 --
+    // D2Item.addSetProperties already computed this on every set item, but nothing rendered it
+    // before this fix) now share ONE "Set (N items):" line instead of two separate ones with the
+    // same heading repeated. Verified by hand against d2111/sets.txt's real "Aldur's Watchtower"
+    // row:
+    //   PCode2a=att% 200-200, PCode3a=mag% 100-100 (no PCode4a/5a)
+    //     -> merges into "Set (2 items): +15 to Dexterity / 200% Bonus to Attack Rating"
+    //     -> merges into "Set (3 items): +15 to Dexterity / 100% Better Chance of Getting Magic Items"
+    //     -> "Set (4 items): +15 to Dexterity" stays alone (no PCode4a to merge in)
+    //   FCode1=res-all 50-50 (expands to 4 separate resist lines), FCode2=dru 3-3,
+    //   FCode3=ac 150-150, FCode4=mana 150-150, FCode5=dmg% 400-400, FCode6=crush 20-20,
+    //   FCode7=extra_grizzly_bears 2-2, FCode8=state/fullsetgeneric 1-1 (a flag, no display text)
+    //     -> "Full Set Bonus: " (a separate, non-per-threshold section) followed by all seven
+    //        visible FCode1-7 lines (D2PropCollection's own tidy()/sort() reorders them; not
+    //        FCode1..7 column order).
     @Test
     public void aldursBoots() throws Exception {
         String expected = "Aldur's Advance\n" +
@@ -79,11 +98,39 @@ public class D2ItemTest {
                 "Fire Resist +44%\n" +
                 "10% Damage Taken Goes To Mana\n" +
                 "Set (2 items): +15 to Dexterity\n" +
+                "200% Bonus to Attack Rating\n" +
                 "Set (3 items): +15 to Dexterity\n" +
+                "100% Better Chance of Getting Magic Items\n" +
                 "Set (4 items): +15 to Dexterity\n" +
-                "\n";
+                "\n" +
+                "Full Set Bonus: +2 to Max Grizzly Bears\n" +
+                "+3 to Druid Skill Levels\n" +
+                "+400% Enhanced Damage\n" +
+                "20% Chance of Crushing Blow\n" +
+                "+150 Defense\n" +
+                "+150 to Mana\n" +
+                "Cold Resist +50%\n" +
+                "Lightning Resist +50%\n" +
+                "Fire Resist +50%\n" +
+                "Poison Resist +50%\n";
         byte[] bytes = {16, 64, -128, 0, 77, 38, -128, 27, 13, 22, -106, -64, 123, -29, -94, 8, -48, 64, 98, -63, 57, 32, 101, 1, 53, 7, -112, 19, -12, -64, -16, -28, 40, -104, -2, 23, -16, -6, 47, -32, -11, 95, -64, -21, 63};
         runItemDumpComparison(expected, loadD2Item(bytes));
+    }
+
+    /**
+     * Narrower, dedicated pin (independent of aldursBoots's exact-match assertion above) that a
+     * found set item's dump always includes its set's full-set bonus: D2Item.addSetProperties
+     * computes it (sets.txt FCode1..8, qFlag 26) on every set item, but nothing rendered it before
+     * D2ItemRenderer.getItemPropertyString grew its "Full Set Bonus:" section. Same fixture as
+     * aldursBoots (Aldur's Advance / Aldur's Watchtower); FCode2=dru 3-3 in d2111/sets.txt's real
+     * "Aldur's Watchtower" row is the value checked here.
+     */
+    @Test
+    public void foundSetItemDumpIncludesFullSetBonus() throws Exception {
+        byte[] bytes = {16, 64, -128, 0, 77, 38, -128, 27, 13, 22, -106, -64, 123, -29, -94, 8, -48, 64, 98, -63, 57, 32, 101, 1, 53, 7, -112, 19, -12, -64, -16, -28, 40, -104, -2, 23, -16, -6, 47, -32, -11, 95, -64, -21, 63};
+        String dump = D2ItemRenderer.itemDump(loadD2Item(bytes), true);
+        assertTrue(dump.contains("Full Set Bonus:"), "expected a full-set bonus section, got: " + dump);
+        assertTrue(dump.contains("+3 to Druid Skill Levels"), "sets.txt FCode2 (dru, 3-3) missing: " + dump);
     }
 
 //    @Test
