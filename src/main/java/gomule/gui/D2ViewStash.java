@@ -66,6 +66,7 @@ public class D2ViewStash extends JInternalFrame implements D2ItemContainer, D2It
     private JPanel iContentPane;
 
     private JEditorPane iItemText;
+    private D2ItemImagePanel iItemImage;
 
     private JButton iPickup;
     private JButton iDropOne;
@@ -269,6 +270,10 @@ public class D2ViewStash extends JInternalFrame implements D2ItemContainer, D2It
         JScrollPane lItemScroll = new JScrollPane(iItemText);
         lItemPanel.setLayout(new BorderLayout());
         lItemPanel.add(lItemScroll, BorderLayout.CENTER);
+        // The item sprite goes in a fixed-height band under the properties: CENTER keeps giving all
+        // the stretchable space to the text, SOUTH only ever gets the panel's preferred height.
+        iItemImage = new D2ItemImagePanel();
+        lItemPanel.add(iItemImage, BorderLayout.SOUTH);
         lItemPanel.setPreferredSize(new Dimension(250, 100));
 
 //        iContentPane.add(lItemPanel, BorderLayout.CENTER);
@@ -311,27 +316,54 @@ public class D2ViewStash extends JInternalFrame implements D2ItemContainer, D2It
 
             iTable.getSelectionModel().addListSelectionListener(new ListSelectionListener() {
                 public void valueChanged(ListSelectionEvent e) {
-                    if (iTable.getSelectedRowCount() == 1) {
-
-                        String dispStr = D2ItemRenderer.itemDumpHtml(iItemModel.getItem(iTable.getSelectedRow()), true)
-                                .replaceAll("<[/]*html>", "");
-                        if (!isStash()) {
-                            iItemText.setText("<html><font size=3 face=Dialog><font color = white>Item From: "
-                                    + (((D2ItemListAll) iStash)
-                                            .getFilename(iItemModel.getItem(iTable.getSelectedRow())))
-                                    + "</font><br><br>" + dispStr + "</font></html>");
-                        } else {
-                            iItemText.setText("<html><font size=3 face=Dialog>" + dispStr + "</font></html>");
-                        }
-                        iItemText.setCaretPosition(0);
-                    } else {
-                        iItemText.setText("");
-                    }
+                    refreshItemDetails();
                 }
             });
         }
         if (iTable.getRowCount() > 0) {
             iTable.setRowSelectionInterval(0, 0);
+        }
+    }
+
+    /**
+     * Refreshes the right hand side detail panel (properties text + item sprite) from the current
+     * table selection. Both are updated together and from this single place, so the preview can
+     * never end up showing a different item than the text, or an item that is already gone.
+     */
+    private void refreshItemDetails() {
+        // itemListChanged() calls us, and it can run while the view is only half built: connect()
+        // is invoked from the constructor, and disconnect() calls itemListChanged() too. Bail out
+        // until the detail widgets actually exist rather than throwing a NPE during startup.
+        if (iItemImage == null || iItemText == null || iTable == null || iItemModel == null) {
+            return;
+        }
+
+        if (iTable.getSelectedRowCount() == 1) {
+            int lRow = iTable.getSelectedRow();
+            // After a refreshData() the model can have shrunk (filter change, Pickup, Delete) while
+            // the selection index has not been updated yet, so the row may point past the end.
+            if (lRow < 0 || lRow >= iItemModel.getRowCount()) {
+                iItemText.setText("");
+                iItemImage.setItem(null);
+                return;
+            }
+
+            D2Item lItem = iItemModel.getItem(lRow);
+            String dispStr = D2ItemRenderer.itemDumpHtml(lItem, true)
+                    .replaceAll("<[/]*html>", "");
+            if (!isStash()) {
+                iItemText.setText("<html><font size=3 face=Dialog><font color = white>Item From: "
+                        + (((D2ItemListAll) iStash)
+                                .getFilename(lItem))
+                        + "</font><br><br>" + dispStr + "</font></html>");
+            } else {
+                iItemText.setText("<html><font size=3 face=Dialog>" + dispStr + "</font></html>");
+            }
+            iItemText.setCaretPosition(0);
+            iItemImage.setItem(lItem);
+        } else {
+            iItemText.setText("");
+            iItemImage.setItem(null);
         }
     }
 
@@ -878,6 +910,13 @@ public class D2ViewStash extends JInternalFrame implements D2ItemContainer, D2It
             }
         }
         setTitle(lTitle);
+
+        // refreshData() above rebuilt iItems from scratch (every filter change goes through here),
+        // and Pickup / Delete remove items from the list, so the row that is still selected may now
+        // hold a different item or none at all. The selection listener does not always fire in that
+        // case (the selected index itself did not move), hence this explicit refresh: a preview must
+        // never outlive the item it shows.
+        refreshItemDetails();
     }
 
     public String getFileName() {
