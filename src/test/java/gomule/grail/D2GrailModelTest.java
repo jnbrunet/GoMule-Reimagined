@@ -199,6 +199,152 @@ public class D2GrailModelTest {
         assertTrue(lRows.isEmpty(), "a Sets-tab CLASS: selection must match nothing on the Uniques tab");
     }
 
+    /**
+     * The real-use request: on the Sets tab, Show: Found used to filter row by row, so a 2-of-4
+     * set showed only the 2 owned pieces and hid what completes it. A set with at least one
+     * structurally-passing found piece must instead show ALL its pieces -- found and missing
+     * alike -- so the player can see what is left. Confirmed against a real fixture too (see this
+     * change's report): scanning pally3/4/5.d2s's "Immortal King's Stone Crusher" resurrects the
+     * whole 6-piece "Immortal King" set, 1 found + 5 missing.
+     */
+    @Test
+    public void aStartedSetShowsAllItsPiecesUnderShowFound() {
+        D2GrailEntry lPieceA = setPiece("Test Set", "Piece A", 91001, D2GrailEntry.Tier.NORMAL);
+        D2GrailEntry lPieceB = setPiece("Test Set", "Piece B", 91002, D2GrailEntry.Tier.NORMAL);
+        D2GrailEntry lPieceC = setPiece("Test Set", "Piece C", 91003, D2GrailEntry.Tier.NORMAL);
+        D2GrailModel lModel = new D2GrailModel(Arrays.asList(lPieceA, lPieceB, lPieceC));
+        lModel.setTab(D2GrailKey.Type.SET);
+        lModel.setStatus(D2GrailModel.Status.FOUND);
+
+        Map<D2GrailKey, D2GrailFinding> lFindings = new HashMap<>();
+        lFindings.put(lPieceA.getKey(), foundOnce());
+        lModel.setFindings(lFindings);
+
+        List<D2GrailModel.Row> lRows = lModel.getRows();
+        assertEquals(3, lRows.size(), "the whole set must show, not just the 1 owned piece");
+        assertTrue(rowNamed(lRows, "Piece A").isFound());
+        assertFalse(rowNamed(lRows, "Piece B").isFound());
+        assertFalse(rowNamed(lRows, "Piece C").isFound());
+    }
+
+    /**
+     * The other half of the same behavior: a set with NOTHING found under Show: Found stays fully
+     * hidden, exactly as before -- this is not "always show every piece of every set", only sets
+     * the player has actually started.
+     */
+    @Test
+    public void aCompletelyUnfoundSetShowsNoRowsUnderShowFound() {
+        D2GrailEntry lPieceA = setPiece("Test Set", "Piece A", 91001, D2GrailEntry.Tier.NORMAL);
+        D2GrailEntry lPieceB = setPiece("Test Set", "Piece B", 91002, D2GrailEntry.Tier.NORMAL);
+        D2GrailModel lModel = new D2GrailModel(Arrays.asList(lPieceA, lPieceB));
+        lModel.setTab(D2GrailKey.Type.SET);
+        lModel.setStatus(D2GrailModel.Status.FOUND);
+        lModel.setFindings(new HashMap<>());
+
+        assertTrue(lModel.getRows().isEmpty());
+        assertTrue(lModel.getSetGroups().isEmpty(), "no header either -- nothing to show for this set");
+    }
+
+    /**
+     * "Decide 'has a found piece' from entries that pass the STRUCTURAL filters -- Chronicle
+     * scope, tier, and the tree/class selection": if the only owned piece is a tier the player has
+     * unchecked, that piece would not itself be visible, so it must not be able to resurrect the
+     * rest of the set either.
+     */
+    @Test
+    public void tierFilterStillSuppressesASetWhoseOnlyFoundPieceIsFilteredOut() {
+        D2GrailEntry lEliteFound = setPiece("Test Set", "Elite Piece", 91001, D2GrailEntry.Tier.ELITE);
+        D2GrailEntry lNormalMissing = setPiece("Test Set", "Normal Piece", 91002, D2GrailEntry.Tier.NORMAL);
+        D2GrailModel lModel = new D2GrailModel(Arrays.asList(lEliteFound, lNormalMissing));
+        lModel.setTab(D2GrailKey.Type.SET);
+        lModel.setStatus(D2GrailModel.Status.FOUND);
+        lModel.setTierEnabled(D2GrailEntry.Tier.ELITE, false);
+
+        Map<D2GrailKey, D2GrailFinding> lFindings = new HashMap<>();
+        lFindings.put(lEliteFound.getKey(), foundOnce());
+        lModel.setFindings(lFindings);
+
+        assertTrue(lModel.getRows().isEmpty(),
+                "the only found piece is Elite, which is unchecked, so the set must not resurrect");
+    }
+
+    /**
+     * Search must only ever narrow which of a started set's rows are DISPLAYED -- never affect
+     * whether the set qualifies as "started" in the first place, or a set would vanish and
+     * reappear as the user types (plan section 7's search behavior, extended to this new mode).
+     */
+    @Test
+    public void searchNarrowsRowsWithoutHidingAQualifyingSetEntirely() {
+        D2GrailEntry lPieceA = setPiece("Test Set", "Piece A", 91001, D2GrailEntry.Tier.NORMAL);
+        D2GrailEntry lPieceB = setPiece("Test Set", "Piece B", 91002, D2GrailEntry.Tier.NORMAL);
+        D2GrailModel lModel = new D2GrailModel(Arrays.asList(lPieceA, lPieceB));
+        lModel.setTab(D2GrailKey.Type.SET);
+        lModel.setStatus(D2GrailModel.Status.FOUND);
+
+        Map<D2GrailKey, D2GrailFinding> lFindings = new HashMap<>();
+        lFindings.put(lPieceA.getKey(), foundOnce());
+        lModel.setFindings(lFindings);
+
+        // A search matching neither piece's own name, but the set qualifies via Piece A -- if
+        // search were allowed to affect qualification, this would need to hide the whole set;
+        // instead it must simply narrow the displayed rows down (here, to none), while the set
+        // still exists as "started" (getSetGroups() would still find it -- see the next block).
+        lModel.setSearchText("this matches nothing at all");
+        assertTrue(lModel.getRows().isEmpty(), "search narrows to zero visible rows");
+
+        // Searching for "Piece B" alone must still find it (proving it was never excluded from
+        // consideration by the found-piece decision, only by the text of the previous search).
+        lModel.setSearchText("Piece B");
+        List<D2GrailModel.Row> lRows = lModel.getRows();
+        assertEquals(1, lRows.size());
+        assertEquals("Piece B", lRows.get(0).getEntry().getDisplayName());
+        assertFalse(lRows.get(0).isFound());
+    }
+
+    /**
+     * Scope check: this new behavior is Sets-tab-only. Show: Found on the Uniques tab keeps its
+     * ordinary per-row meaning -- there is no set to complete there, so a missing unique must never
+     * leak into the Found list.
+     */
+    @Test
+    public void showFoundOnUniquesTabIsUnaffected() {
+        D2TxtFile.constructTxtFiles("./d2111");
+        D2GrailModel lModel = new D2GrailModel();
+        lModel.setTab(D2GrailKey.Type.UNIQUE);
+        lModel.setStatus(D2GrailModel.Status.FOUND);
+
+        D2GrailEntry lHarlequinCrest = findByDisplayName(D2GrailIndex.getEntries(), "Harlequin Crest");
+        Map<D2GrailKey, D2GrailFinding> lFindings = new HashMap<>();
+        lFindings.put(lHarlequinCrest.getKey(), foundOnce());
+        lModel.setFindings(lFindings);
+
+        List<D2GrailModel.Row> lRows = lModel.getRows();
+        assertEquals(1, lRows.size(), "only the one found unique, not the rest of the tab");
+        assertTrue(lRows.get(0).isFound());
+    }
+
+    private static D2GrailEntry setPiece(String pSetName, String pDisplayName, int pId, D2GrailEntry.Tier pTier) {
+        return new D2GrailEntry(
+                D2GrailKey.set(pId), pDisplayName, "abc", "Test Base", pTier,
+                "sword", "Swords", D2GrailCategories.RootGroup.WEAPONS,
+                pSetName, 0, "", "General", "", true, null);
+    }
+
+    private static D2GrailFinding foundOnce() {
+        D2GrailFinding lFinding = new D2GrailFinding();
+        lFinding.record(null, "C:/saves/test.d2s", "test.d2s");
+        return lFinding;
+    }
+
+    private static D2GrailModel.Row rowNamed(List<D2GrailModel.Row> pRows, String pName) {
+        for (D2GrailModel.Row lRow : pRows) {
+            if (pName.equals(lRow.getEntry().getDisplayName())) {
+                return lRow;
+            }
+        }
+        throw new AssertionError(pName + " not found among rows: " + pRows);
+    }
+
     private static D2GrailEntry findByDisplayName(List<D2GrailEntry> pEntries, String pName) {
         for (D2GrailEntry lEntry : pEntries) {
             if (pName.equals(lEntry.getDisplayName())) {

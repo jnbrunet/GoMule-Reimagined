@@ -7,10 +7,12 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.EnumSet;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Pattern;
 
 /**
@@ -239,8 +241,22 @@ public final class D2GrailModel {
      * used for the actual list and, grouped, for {@link #getSetGroups()} -- as opposed to
      * {@link #getTabProgress()}/{@link #getCategoryProgress()}, which deliberately leave status and
      * search out (plan section 7: otherwise the Missing filter would always show 0%).
+     * <p>
+     * One deliberate exception to "status applies per row": on the Sets tab, {@link Status#FOUND}
+     * shows every piece (found AND missing) of any set with at least one structurally-passing
+     * found piece, instead of only the owned ones -- see
+     * {@link #setNamesWithAStructurallyFoundPiece()}. {@link Status#MISSING} and {@link Status#ALL}
+     * are unaffected, on every tab, including Sets.
      */
     public List<Row> getRows() {
+        // Sets tab + Show: Found only (a request from real use: a 2-of-4 set under Show: Found
+        // used to show only the 2 owned pieces, hiding what completes it): a set with at least one
+        // STRUCTURALLY-passing found piece shows every one of its pieces, found and missing alike,
+        // instead of filtering each row by status individually. Null everywhere else, meaning
+        // "apply passesStatus() per row exactly as before" -- see setNamesWithAStructurallyFoundPiece().
+        Set<String> lSetsToShowInFull = (iTab == D2GrailKey.Type.SET && iStatus == Status.FOUND)
+                ? setNamesWithAStructurallyFoundPiece() : null;
+
         List<Row> lOut = new ArrayList<>();
         for (D2GrailEntry lEntry : iAllEntries) {
             if (lEntry.getKey().getType() != iTab) {
@@ -250,7 +266,20 @@ public final class D2GrailModel {
                 continue;
             }
             D2GrailFinding lFinding = findingFor(lEntry);
-            if (!passesStatus(lFinding) || !passesSearch(lEntry)) {
+
+            if (lSetsToShowInFull != null) {
+                // A set not in this set never had a found piece under the current structural
+                // filters -- stays hidden entirely, same as Show: Found always did for it.
+                if (!lSetsToShowInFull.contains(lEntry.getSetName())) {
+                    continue;
+                }
+                // Found or missing, this piece belongs to a set the player has started: show it
+                // (status is deliberately not checked here -- that is the whole point).
+            } else if (!passesStatus(lFinding)) {
+                continue;
+            }
+
+            if (!passesSearch(lEntry)) {
                 continue;
             }
             lOut.add(new Row(lEntry, lFinding));
@@ -258,6 +287,31 @@ public final class D2GrailModel {
         lOut.sort(Comparator.comparing(pRow -> D2ItemRenderer.stripColorCodes(pRow.getEntry().getDisplayName())
                 .toLowerCase(Locale.ROOT)));
         return lOut;
+    }
+
+    /**
+     * The set names (Sets tab only) with at least one piece that is both found and passes the
+     * STRUCTURAL filters -- Chronicle scope, tier, and the tree/class selection -- but deliberately
+     * NOT search: a set must not appear or disappear as the user types, and search only ever
+     * narrows which of the resulting rows are displayed (see {@link #passesSearch}'s call site in
+     * {@link #getRows()}, applied after this decision, not as part of it). Tier in particular means
+     * a set whose only owned piece is a tier the player has unchecked does not resurrect the set --
+     * that piece would not itself be visible, so it should not be able to reveal the rest either.
+     */
+    private Set<String> setNamesWithAStructurallyFoundPiece() {
+        Set<String> lNames = new HashSet<>();
+        for (D2GrailEntry lEntry : iAllEntries) {
+            if (lEntry.getKey().getType() != D2GrailKey.Type.SET) {
+                continue;
+            }
+            if (!passesChronicleScope(lEntry) || !passesTier(lEntry) || !passesCategory(lEntry)) {
+                continue;
+            }
+            if (findingFor(lEntry) != null) {
+                lNames.add(lEntry.getSetName());
+            }
+        }
+        return lNames;
     }
 
     /**
