@@ -212,10 +212,25 @@ public class D2GrailListRendererTest {
 
     /**
      * A missing WEAPON unique: "Hand of Blessed Light" (base code "9ws" = "Divine Scepter",
-     * weapons.txt). Verified by hand against weapons.txt's real "Divine Scepter" row: mindam=16,
-     * maxdam=38, both "1or2handed" and "2handed" blank (-> one-hand-only "One Hand Damage: 16 -
-     * 38"), durability=250, reqstr=103, reqdex blank (omitted), levelreq=25 -- but overridden by
-     * uniqueitems.txt's OWN "lvl req"=55 for this unique (-> "Required Level: 55", not 25).
+     * weapons.txt). Verified by hand against weapons.txt's real "Divine Scepter" row (mindam=16,
+     * maxdam=38, both "1or2handed" and "2handed" blank -> one-hand-only) run through
+     * D2Item.applyItemMods()'s own weapon-damage formula against this unique's real prop2 "dmg%"
+     * (130-160% Enhanced Damage) and prop7 "dmg-norm" (min=20, max=45 -- NOT a rolled range: its
+     * properties.txt row is func1=15/func2=16, "min feeds mindamage, max feeds maxdamage", two
+     * DIFFERENT stats always both applied -- see D2GrailListRenderer.isRangeEligible's javadoc, and
+     * D2GrailListRendererRangeTest for the dedicated "Adds 20 - 45 Damage" pin), so dmgTriple[1]=20
+     * and dmgTriple[2]=45 identically in BOTH flavours:
+     * <pre>
+     *   min low  = floor(16/100*130 + 16+20) = floor(20.8+36) = 56
+     *   min high = floor(16/100*160 + 16+20) = floor(25.6+36) = 61
+     *   max low  = floor(38/100*130 + 38+45) = floor(49.4+83) = 132
+     *   max high = floor(38/100*160 + 38+45) = floor(60.8+83) = 143
+     * </pre>
+     * giving "One Hand Damage: 56-61 to 132-143", not weapons.txt's bare, unmodified "16 - 38"
+     * (GoMule showed the raw base before the item-modifier feature this pins). durability=250 (no
+     * durability-modifying prop on this row, so unaffected), reqstr=103 (ditto, unaffected),
+     * reqdex blank (omitted), levelreq=25 -- but overridden by uniqueitems.txt's OWN "lvl req"=55
+     * for this unique (-> "Required Level: 55", not 25).
      */
     @Test
     public void missingWeaponUniqueTooltipShowsDamage() {
@@ -223,7 +238,9 @@ public class D2GrailListRendererTest {
         D2GrailEntry lHandOfBlessedLight = findByDisplayName("Hand of Blessed Light");
         String lTooltip = D2GrailListRenderer.tooltipFor(rowOf(lHandOfBlessedLight, null), null);
 
-        assertTrue(lTooltip.contains("One Hand Damage: 16 - 38"), lTooltip);
+        assertTrue(lTooltip.contains("One Hand Damage: 56-61 to 132-143"), lTooltip);
+        assertFalse(lTooltip.contains("One Hand Damage: 16 - 38"),
+                "the item's own dmg%/dmg-norm modifiers must be applied, not the bare base range: " + lTooltip);
         assertFalse(lTooltip.contains("Two Hand Damage"), "not 2handed/1or2handed: " + lTooltip);
         assertTrue(lTooltip.contains("Durability: 250"), lTooltip);
         assertTrue(lTooltip.contains("Required Level: 55"), "unique's own lvl req (55) must win over the base's (25): " + lTooltip);

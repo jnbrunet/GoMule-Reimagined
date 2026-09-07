@@ -189,6 +189,36 @@ public class D2Prop {
             }
         } else if (pNum == 112) {
             dispLoc = 2;
+        } else if (pNum == 91) {
+            // item_req_percent, the stat behind properties.txt's "ease". Its own descfunc is 19,
+            // whose generic branch below renders by substituting the raw value into properties.txt's
+            // "*Tooltip" column -- and for "ease" that column is the fixed string "Requirements -#%",
+            // whose minus sign is literal text rather than anything derived from the value. That
+            // produced two different wrong lines, both confirmed in the running app:
+            //   - a negative value printed its own sign into the template's, e.g. the unique
+            //     "Steeldriver" (uniqueitems.txt "ease" min=-50) rendered "Requirements --50%";
+            //   - a positive value was announced as a REDUCTION while the item actually raises the
+            //     requirement, e.g. "The Grandfather" (min=25 max=50) rendered "Requirements -25 to
+            //     -50%" directly above its own, correctly computed "Required Strength: 236-283".
+            // The value's sign is the real one and must be the displayed one: ./d2111's tables use
+            // BOTH signs for "ease" (49 negative rows, 40 positive), and the game itself writes that
+            // table value into the save verbatim, sign and all -- confirmed against a real save's
+            // found "Sin and Greed", whose setitems.txt row is "ease" min=20 max=20 and whose
+            // bitstream-read property decodes to +20, not -20. So a positive value genuinely
+            // increases requirements (the mod's own site describes The Grandfather as "Requirements
+            // Increased By 25-50%") and a negative one reduces them, exactly as
+            // D2Item.applyItemMods()'s "-Req" arithmetic already applies it.
+            //
+            // funcN 4 with dispLoc 2 is the existing signed-percent renderer used elsewhere in this
+            // switch ("<name> +N%" when non-negative, "<name> N%" when negative), so this only
+            // routes the stat to it -- no new formatting code, and nothing else in the switch moves.
+            // Scoped to this one pNum on purpose: the other "-#" templates in properties.txt (the
+            // "pierce-*" family, "reduce-ac", "dmg-ac") store a positive magnitude whose minus IS
+            // the correct phrasing -- "-10% to Enemy Fire Resistance" for a pierce value of 10 --
+            // so stripping the template's sign generally would break every one of those.
+            oString = "Requirements";
+            funcN = 4;
+            dispLoc = 2;
         }
 
         switch (funcN) {
@@ -562,11 +592,19 @@ public class D2Prop {
                 }
             case (37):
 
-                return "All Resistances +" + pVals[0];
+                // The "+" is written only for a non-negative value, the same test every other
+                // signed case in this switch makes (cases 1/4/6/8 all guard on "pVals[0] > -1"):
+                // it used to be hardcoded, so a real negative rolled or table-sourced value
+                // rendered as the nonsense "All Resistances +-20" -- seen on the missing-item
+                // tooltip for the unique "Gheed's Wager", whose uniqueitems.txt prop6 is
+                // res-all min=-20/max=20. Positive values are untouched.
+                return "All Resistances " + (pVals[0] > -1 ? "+" : "") + pVals[0];
 
             case (38):
 
-                return "All Stats +" + pVals[0];
+                // Same hardcoded-"+" fix as case 37 above -- a negative all-stats value would
+                // otherwise render as "All Stats +-5". Positive values are untouched.
+                return "All Stats " + (pVals[0] > -1 ? "+" : "") + pVals[0];
 
             case (39):
 

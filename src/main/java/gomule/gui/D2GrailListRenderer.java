@@ -7,7 +7,9 @@ import gomule.grail.D2GrailKey;
 import gomule.grail.D2GrailModel;
 import gomule.item.D2Item;
 import gomule.item.D2ItemRenderer;
+import gomule.item.D2Prop;
 import gomule.item.D2PropCollection;
+import gomule.item.RequirementModifierAccumulator;
 import randall.d2files.D2TxtFile;
 import randall.d2files.D2TxtFileItemProperties;
 
@@ -22,6 +24,9 @@ import java.awt.Component;
 import java.awt.Image;
 import java.util.ArrayList;
 import java.util.Iterator;
+import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Renders one row of the Holy Grail list: a colour icon + the item's quality-coloured name +
@@ -305,43 +310,43 @@ public class D2GrailListRenderer extends JLabel implements ListCellRenderer<Obje
             lHtml.append(escapeHtml(lTierLabel)).append("<br>&#10;");
         }
 
-        appendMissingBaseStats(lHtml, pEntry);
-
+        // Built BEFORE appendMissingBaseStats (even though the base-stat LINES it feeds print
+        // first -- see below) because appendMissingBaseStats now needs these same two flavoured,
+        // tidy()'d, applyOp()'d collections to compute the item's OWN modified damage/defense/
+        // durability/requirements (D2Item.applyItemMods()'s job for a found item -- see
+        // appendMissingBaseStats's own javadoc), not just to print the property lines afterward.
+        // Deliberately the item's OWN prop1..N collections only, never the set-bonus sections
+        // built later in this method: a missing set piece has no ACTIVATED set, exactly like a
+        // found set item whose set isn't assembled -- D2Item.applyItemMods() only ever reads
+        // qFlag 0 (an item's own props) or 12..16 (an activated set bonus) from iProps, and every
+        // prop this tooltip ever builds is qFlag 0, so the set-bonus sections (qFlag has no
+        // meaning there either way) simply never belong in this accumulation.
         D2TxtFileItemProperties lRow = pEntry.getSourceRow();
+        FlavouredProps lOwnProps = new FlavouredProps(new D2PropCollection(), new D2PropCollection());
         if (lRow != null) {
             int lMaxPropSlots = pEntry.getKey().getType() == D2GrailKey.Type.SET ? 9 : 12;
-            D2PropCollection lProps = new D2PropCollection();
+            List<PropSlot> lSlots = new ArrayList<PropSlot>();
             for (int i = 1; i <= lMaxPropSlots; i++) {
-                String lCode = lRow.get("prop" + i);
-                if (lCode == null || lCode.isEmpty()) {
-                    continue;
-                }
-                try {
-                    // propToStat's own parameter order is (code, min, max, param) -- matching the
-                    // "propN, parN, minN, maxN" column order in uniqueitems.txt/setitems.txt is a
-                    // one-letter trap here (par vs param) that is easy to get backwards.
-                    ArrayList lStats = D2TxtFile.propToStat(
-                            lCode, lRow.get("min" + i), lRow.get("max" + i), lRow.get("par" + i), 0);
-                    //noinspection unchecked
-                    lProps.addAll(lStats);
-                } catch (RuntimeException pEx) {
-                    // One malformed property slot must not blank out every other real one.
-                }
+                // propToStat's own parameter order is (code, min, max, param) -- matching the
+                // "propN, parN, minN, maxN" column order in uniqueitems.txt/setitems.txt is a
+                // one-letter trap here (par vs param) that is easy to get backwards.
+                addSlotIfPresent(lSlots, lRow, "prop" + i, "min" + i, "max" + i, "par" + i);
             }
-            lProps.tidy();
-            // The actual per-level scaling (e.g. uniqueitems.txt "hp/lvl" par=12 -> "+12 to Life
-            // (Based on Character Level)" becoming a real "+127" at level 85) happens here, not in
-            // generateDisplay(): D2Prop.applyOp() is what multiplies by character level and divides
-            // by the stat's own itemstatcost.txt divisor -- D2Item.java calls this once on every
-            // real item's iProps (applyItemMods()) right after all its properties are read, which
-            // this tooltip has no equivalent construction step to inherit, so it is called
-            // explicitly here instead. Confirmed to reproduce the real game's own math exactly
-            // against a found item: charFiles/pally9.d2s's real "Cleglaw's Pincers" (level-85
-            // character) renders its bitstream-read att/lvl bonus as "+850"; feeding that same
-            // stat's raw table value (par=20) through propToStat + applyOp(85) produces the
-            // identical "+850 to Attack Rating (Based on Character Level)".
-            lProps.applyOp(ASSUMED_CHARACTER_LEVEL);
-            lHtml.append(lProps.generateDisplay(0, ASSUMED_CHARACTER_LEVEL));
+            lOwnProps = buildFlavouredProps(lSlots);
+        }
+
+        appendMissingBaseStats(lHtml, pEntry, lOwnProps);
+
+        if (lRow != null) {
+            // renderFlavouredProps runs generateDisplay() on each of the two already-built
+            // collections and merges the two results into one "min-max" fragment -- see
+            // mergeRangeFragments's javadoc. The per-level scaling comment that used to live here
+            // (uniqueitems.txt "hp/lvl" par=12 -> "+12 to Life (Based on Character Level)" becoming
+            // a real "+127" at level 85, confirmed against charFiles/pally9.d2s's "Cleglaw's
+            // Pincers") still applies verbatim to BOTH passes -- a per-level slot has no min/max at
+            // all, so both passes compute the identical applyOp() scaling and merge back to
+            // themselves, exactly as before this change.
+            lHtml.append(renderFlavouredProps(lOwnProps));
         }
 
         if (pEntry.getKey().getType() == D2GrailKey.Type.SET) {
@@ -354,18 +359,25 @@ public class D2GrailListRenderer extends JLabel implements ListCellRenderer<Obje
 
     /**
      * A found item's tooltip shows its own base statistics (defense, damage, durability,
-     * requirements) straight from the real, rolled D2Item -- see
-     * D2ItemRenderer.generatePropStringNoHtmlTags. A missing entry has no rolled instance, only its
-     * base item's misc.txt/armor.txt/weapons.txt row (D2TxtFile.search(baseCode)), so this shows
-     * the base RANGE instead of a single rolled number (e.g. "Defense: 10 - 14", not one number a
-     * specific drop might roll) -- exactly what there IS to show for something never found.
+     * requirements) straight from the real, rolled D2Item, AFTER D2Item.applyItemMods() (D2Item.
+     * java, roughly lines 1509-1682) has folded the item's own +damage%/+defense/+durability/
+     * -requirement properties into the base numbers -- see D2ItemRenderer.
+     * generatePropStringNoHtmlTags. A missing entry has no rolled instance, only its base item's
+     * misc.txt/armor.txt/weapons.txt row (D2TxtFile.search(baseCode)) and its own two flavoured
+     * property collections (pOwnProps -- built by missingTooltip from prop1..N, BEFORE this
+     * method runs, so both the base-stat lines here and the property lines printed afterward share
+     * the exact same accumulation), so this mirrors applyItemMods()'s own arithmetic by hand
+     * against those, showing the base RANGE ACROSS BOTH the base row's own roll variance AND the
+     * item's own modifier roll variance (e.g. "One Hand Damage: 148-185 to 357-500" on Wrath of the
+     * Seraphim -- verified by hand against D2Item.applyItemMods(), see accumulateItemMods()'s
+     * javadoc) -- exactly what there IS to show for something never found.
      * <p>
      * A runeword has no single base item (its allowed bases are itype1..itype6, a list, not one
      * row) and is skipped entirely rather than guessing at one. Every line degrades independently:
      * a missing base row, or one column that is empty/non-numeric, drops only that line, never the
      * rest of the tooltip -- the same stance as every other piece of this tooltip.
      */
-    private static void appendMissingBaseStats(StringBuilder pHtml, D2GrailEntry pEntry) {
+    private static void appendMissingBaseStats(StringBuilder pHtml, D2GrailEntry pEntry, FlavouredProps pOwnProps) {
         if (pEntry.getKey().getType() == D2GrailKey.Type.RUNEWORD) {
             return;
         }
@@ -398,29 +410,49 @@ public class D2GrailListRenderer extends JLabel implements ListCellRenderer<Obje
         boolean lIsArmor = "armor".equals(lTable);
         boolean lIsWeapon = "weapons".equals(lTable);
 
+        // One accumulation per flavour, covering every kind of modifier at once -- exactly mirrors
+        // D2Item.applyItemMods()'s own single pass over iProps, which likewise accumulates
+        // dmgTriple/armourTriple/durTriple/the requirement accumulator together before applying any
+        // of them. Harmless (never read) for whichever of dmgTriple/armourTriple doesn't apply to
+        // this base's own type -- e.g. an armor unique's own prop list realistically never carries
+        // an item_maxdamage_percent (pNum 17) entry to begin with, so accumulateItemMods filling in
+        // dmgTriple[0] for it anyway is inert, never consulted by appendArmorStats below. This is a
+        // deliberate simplification versus D2Item.applyItemMods()'s own isTypeArmor()/isTypeWeapon()
+        // gating INSIDE the accumulation loop: the same segregation still holds here, just enforced
+        // by which triple the caller chooses to read, not by which the accumulator chooses to fill.
+        ItemModifiers lMinMods = accumulateItemMods(pOwnProps.iMin);
+        ItemModifiers lMaxMods = accumulateItemMods(pOwnProps.iMax);
+
         if (lIsArmor) {
             try {
-                appendArmorStats(pHtml, lBaseRow);
+                appendArmorStats(pHtml, lBaseRow, lMinMods, lMaxMods);
             } catch (RuntimeException pEx) {
                 // A broken armor column must not block durability/requirements below.
             }
         }
         if (lIsWeapon) {
             try {
-                appendWeaponStats(pHtml, lBaseRow);
+                appendWeaponStats(pHtml, lBaseRow, lMinMods, lMaxMods);
             } catch (RuntimeException pEx) {
                 // Ditto for a broken weapon column.
             }
         }
         try {
-            appendDurability(pHtml, lBaseRow);
+            appendDurability(pHtml, lBaseRow, lMinMods, lMaxMods);
         } catch (RuntimeException pEx) {
             // Ditto for durability.
         }
         try {
             Integer lReqLevel = requiredLevel(pEntry, lBaseRow);
             if (lReqLevel != null) {
-                pHtml.append("Required Level: ").append(lReqLevel).append("<br>&#10;");
+                // D2Item.applyItemMods()'s own precedence: iReqLvl is first set from the unique/set
+                // row (D2Item.readExtend, mirrored here by requiredLevel() itself), THEN
+                // applyItemMods() ADDS the item's own pNum-92 ("+LvlReq") accumulation on top -- so
+                // the accumulator's contribution is added to requiredLevel()'s result, never
+                // replacing it.
+                int lFromMinFlavour = lReqLevel + lMinMods.iRequirementModifierAccumulator.getLevelRequirement();
+                int lFromMaxFlavour = lReqLevel + lMaxMods.iRequirementModifierAccumulator.getLevelRequirement();
+                pHtml.append("Required Level: ").append(formatModifiedValue(lFromMinFlavour, lFromMaxFlavour)).append("<br>&#10;");
             }
         } catch (RuntimeException pEx) {
             // Ditto for the required-level precedence lookup below.
@@ -428,7 +460,9 @@ public class D2GrailListRenderer extends JLabel implements ListCellRenderer<Obje
         try {
             Integer lReqStr = getReq(lBaseRow.get("reqstr"));
             if (lReqStr != null) {
-                pHtml.append("Required Strength: ").append(lReqStr).append("<br>&#10;");
+                int lFromMinFlavour = lReqStr + applyPercentRequirement(lReqStr, lMinMods);
+                int lFromMaxFlavour = lReqStr + applyPercentRequirement(lReqStr, lMaxMods);
+                pHtml.append("Required Strength: ").append(formatModifiedValue(lFromMinFlavour, lFromMaxFlavour)).append("<br>&#10;");
             }
         } catch (RuntimeException pEx) {
             // Ditto.
@@ -436,7 +470,9 @@ public class D2GrailListRenderer extends JLabel implements ListCellRenderer<Obje
         try {
             Integer lReqDex = getReq(lBaseRow.get("reqdex"));
             if (lReqDex != null) {
-                pHtml.append("Required Dexterity: ").append(lReqDex).append("<br>&#10;");
+                int lFromMinFlavour = lReqDex + applyPercentRequirement(lReqDex, lMinMods);
+                int lFromMaxFlavour = lReqDex + applyPercentRequirement(lReqDex, lMaxMods);
+                pHtml.append("Required Dexterity: ").append(formatModifiedValue(lFromMinFlavour, lFromMaxFlavour)).append("<br>&#10;");
             }
         } catch (RuntimeException pEx) {
             // Ditto.
@@ -444,20 +480,203 @@ public class D2GrailListRenderer extends JLabel implements ListCellRenderer<Obje
     }
 
     /**
-     * Defense range ("Defense: 10 - 14", or a single number when armor.txt's "minac" equals
-     * "maxac") plus "Chance to Block: " when armor.txt's own "block" column is populated (shields
-     * only, in practice). A weapon/misc base simply has neither column, so this contributes nothing
-     * for those -- no table lookup needed to tell them apart.
+     * D2Item.applyItemMods()'s own "-Req" arithmetic (pNum 91, "item_req_percent"): "iReqDex +
+     * (int)(iReqDex * percentReqirementsModifier)" -- reproduced here as the ADDEND only (the
+     * caller still adds the base requirement itself), so the same expression can feed both
+     * Required Strength and Required Dexterity without repeating the cast/division.
      */
-    private static void appendArmorStats(StringBuilder pHtml, D2TxtFileItemProperties pRow) {
+    private static int applyPercentRequirement(int pBaseRequirement, ItemModifiers pMods) {
+        return (int) (pBaseRequirement * (pMods.iRequirementModifierAccumulator.getPercentRequirements() / 100.0));
+    }
+
+    /**
+     * Formats one base-stat value that may differ between the min- and max-flavoured
+     * accumulations: a single number when the two agree (the common case -- most items don't
+     * modify every one of damage/defense/durability/requirements), otherwise mergeNumberToken's
+     * own "low-high" text -- reusing mergeNumberToken rather than re-implementing its equal/
+     * ascending/negative/backwards rules a second time.
+     * <p>
+     * Sorts the two inputs itself (Math.min/Math.max) rather than trusting the caller to already
+     * pass them low-then-high: for every base stat this is currently used for (damage, defense,
+     * durability, and requirements -- see accumulateItemMods()'s own pNum-91 paragraph for why
+     * requirements are NOT sign-corrected, so today's real data always happens to keep the
+     * min-flavoured accumulation the smaller of the two) the min-flavoured pass already produces
+     * the lower number, making this a no-op in practice -- but a REDUCING percent modifier (a
+     * bigger negative magnitude cutting a base value down further) would flip that relationship
+     * for whichever flavour applies the bigger cut, so sorting defensively here, once, in the one
+     * formatter every base-stat call site shares, is cheap insurance against a future real item
+     * exercising that shape: mergeNumberToken's own "min &gt; max -> emit the max token alone"
+     * fallback would otherwise silently swallow a genuinely descending pair down to one wrong
+     * number instead of showing the real range.
+     */
+    private static String formatModifiedValue(int pFromMinFlavour, int pFromMaxFlavour) {
+        int lLow = Math.min(pFromMinFlavour, pFromMaxFlavour);
+        int lHigh = Math.max(pFromMinFlavour, pFromMaxFlavour);
+        return mergeNumberToken(String.valueOf(lLow), String.valueOf(lHigh));
+    }
+
+    /**
+     * One flavour's accumulated item modifiers: D2Item.applyItemMods()'s own dmgTriple/
+     * armourTriple/durTriple int arrays plus its RequirementModifierAccumulator (D2Item.java,
+     * roughly lines 1511-1631), filled here from ONE flavoured D2PropCollection (min or max) via
+     * accumulateItemMods() instead of a real item's iProps. See accumulateItemMods()'s javadoc for
+     * the field-by-field mirroring and what is deliberately left out.
+     */
+    private static final class ItemModifiers {
+        private final int[] iDmgTriple = new int[5];
+        private final int[] iArmourTriple = new int[3];
+        private final int[] iDurTriple = new int[2];
+        private final RequirementModifierAccumulator iRequirementModifierAccumulator = new RequirementModifierAccumulator();
+    }
+
+    /**
+     * Mirrors D2Item.applyItemMods()'s own accumulation loop (D2Item.java, roughly lines 1518-1631)
+     * field-for-field, run here against ONE flavoured, already tidy()'d and applyOp()'d
+     * D2PropCollection instead of a real item's post-applyOp() iProps:
+     * <ul>
+     *   <li>pNum 73/75 (+Dur / Dur%) -> durTriple[0]/[1], pNum 92/91 (+LvlReq / -Req) -> the
+     *   RequirementModifierAccumulator -- all four unconditional on item type, exactly as
+     *   D2Item.applyItemMods() itself accumulates them BEFORE its isTypeArmor()/isTypeWeapon()
+     *   branch.</li>
+     *   <li>pNum 16/31/214 (EDef / +Def / +Def/lvl) -> armourTriple[0]/[1]/[2]; pNum 17/21/22/218/
+     *   219 (EDmg / MinDmg / MaxDmg / MaxDmg/Lvl / MaxDmg%/lvl) -> dmgTriple[0..4], including pNum
+     *   21's own funcN==31 special case (some min-damage stats carry a second value in pVals[1]
+     *   that D2Item.applyItemMods() folds into dmgTriple[2], the MAX side, not the min side --
+     *   copied here verbatim, not something this feature invented).</li>
+     * </ul>
+     * Deliberately NOT attempted, exactly per the parent task's own scope: applyItemMods()'
+     * ethereal branch (a missing entry has no ethereal flag to read) and its pNum 97/107
+     * skill-granted-level-requirement raise (a separate skills.txt lookup keyed off a specific
+     * granted skill, out of scope here).
+     * <p>
+     * The qFlag filter (0 or 12..16) is copied verbatim from D2Item.applyItemMods() too, even
+     * though every D2Prop this tooltip ever builds is qFlag 0 (see the class javadoc's qFlag
+     * note) -- defensive, in case a future caller ever feeds this a collection built some other
+     * way, at zero cost to the real, current callers.
+     * <p>
+     * pNum 91 (item_req_percent, properties.txt code "ease") is passed through with its ORIGINAL
+     * sign, NOT negated -- investigated and deliberately rejected, so a future reader doesn't
+     * re-attempt the same "obviously missing minus sign" fix without seeing why it was rejected.
+     * The temptation: "ease"'s *Tooltip is the literal string "Requirements -#%" (the minus lives
+     * in that template text, substituted with a raw magnitude), so a row like "The Grandfather"'s
+     * real prop7 "ease" (min=25/max=50, positive) LOOKS like it should be negated to match its own
+     * property line's implied "-25 to -50%" reduction, and itemstatcost.txt's item_req_percent row
+     * (*ID 91, Signed=1, Save Add=100) looks like independent evidence for it -- a "Save Add" is
+     * commonly (mis)read as "the true value must be negative, that's why it needs a bias to fit an
+     * unsigned field". But "Save Add" is just a bidirectional-signed-value encoding trick (shift by
+     * a constant so an unsigned bit field can hold negative numbers); it does not, by itself, mean
+     * the real gameplay value is always negative, and checking every real "ease" usage in
+     * ./d2111's uniqueitems.txt + setitems.txt disproves the "always negate" theory outright: 49
+     * rows already store a NEGATIVE min/max directly (e.g. "Steeldriver" min=-50/max=-50) against
+     * 40 that store POSITIVE (including "The Grandfather") -- a near-even split, not a rare
+     * exception. Confirmed the "already negative" rows are the genuine, correctly-authored ones by
+     * their own visible tooltip glitch: "Steeldriver"'s property line renders as "Requirements
+     * --50%" (a double-minus, from the SAME fixed "-#%" template substituting an already-negative
+     * number) -- exactly the artifact expected if -50 truly is Steeldriver's intended,
+     * already-correctly-signed value, and proof the template's "-" is unconditional decoration, not
+     * a reliable signal of which sign convention a given row used. Negating pNum 91 unconditionally
+     * would "fix" the ~40 positive rows (including The Grandfather, apparently a genuine ./d2111
+     * data error, not a GoMule bug -- vanilla Diablo II's own real "The Grandfather" is well known
+     * for REDUCING requirements) at the cost of silently inverting the other 49 already-correct
+     * rows (turning Steeldriver's real reduction into an increase). With the underlying mod data
+     * itself this evenly, irreconcilably inconsistent for a single stat, passing pVals[0] through
+     * unchanged -- trusting the table at face value, exactly as every other stat here does -- is
+     * the only choice that does not knowingly break a large, easily-counted set of real items to
+     * fix a different one.
+     */
+    private static ItemModifiers accumulateItemMods(D2PropCollection pProps) {
+        ItemModifiers lMods = new ItemModifiers();
+        for (int x = 0; x < pProps.size(); x++) {
+            D2Prop lProp = (D2Prop) pProps.get(x);
+            int lQFlag = lProp.getQFlag();
+            if (lQFlag != 0 && lQFlag != 12 && lQFlag != 13 && lQFlag != 14 && lQFlag != 15 && lQFlag != 16) {
+                continue;
+            }
+            int lPNum = lProp.getPNum();
+            int[] lPVals = lProp.getPVals();
+            if (lPNum == 73) {
+                lMods.iDurTriple[0] += lPVals[0];
+            } else if (lPNum == 75) {
+                lMods.iDurTriple[1] += lPVals[0];
+            } else if (lPNum == 92) {
+                lMods.iRequirementModifierAccumulator.accumulateLevelRequirement(lPVals[0]);
+            } else if (lPNum == 91) {
+                // Deliberately NOT sign-corrected -- investigated and rejected; see this method's
+                // own javadoc (the pNum 91 paragraph) for why a blanket negation here would be a
+                // net regression, not a fix. pVals[0] is passed straight through, exactly as every
+                // other stat in this method is.
+                lMods.iRequirementModifierAccumulator.accumulatePercentRequirements(lPVals[0]);
+            } else if (lPNum == 16) {
+                lMods.iArmourTriple[0] += lPVals[0];
+            } else if (lPNum == 31) {
+                lMods.iArmourTriple[1] += lPVals[0];
+            } else if (lPNum == 214) {
+                lMods.iArmourTriple[2] += lPVals[0];
+            } else if (lPNum == 17) {
+                lMods.iDmgTriple[0] += lPVals[0];
+            } else if (lPNum == 21) {
+                lMods.iDmgTriple[1] += lPVals[0];
+                if (lProp.getFuncN() == 31) {
+                    lMods.iDmgTriple[2] += lPVals[1];
+                }
+            } else if (lPNum == 22) {
+                lMods.iDmgTriple[2] += lPVals[0];
+            } else if (lPNum == 218) {
+                lMods.iDmgTriple[3] += lPVals[0];
+            } else if (lPNum == 219) {
+                lMods.iDmgTriple[4] += lPVals[0];
+            }
+        }
+        return lMods;
+    }
+
+    /**
+     * D2Item.applyItemMods()'s own "percent-of-base plus flat" formula, copied verbatim (floor()
+     * and all -- NOT interchangeable with a plain int division/multiplication, per the parent
+     * task's own instruction): {@code floor(base/100.0*percent + (base+flat))}. Covers THREE of
+     * applyItemMods()'s four uses of this exact shape (weapon min-damage, armor defense, max
+     * durability); weapon max-damage needs a different percent/flat PAIR (dmgTriple[0]+dmgTriple[4]
+     * and dmgTriple[2]+dmgTriple[3] respectively, not a single triple slot each) but the same
+     * underlying arithmetic, so computeWeaponDamage() below calls this same helper twice with those
+     * combined arguments rather than duplicating the formula a second time.
+     */
+    private static int applyPercentPlusFlat(int pBase, int pPercent, int pFlat) {
+        return (int) Math.floor((pBase / 100.0) * pPercent + (pBase + pFlat));
+    }
+
+    /**
+     * Defense range ("Defense: 10 - 14", or a single number when armor.txt's "minac" equals
+     * "maxac"), each end now run through D2Item.applyItemMods()'s own armor formula against its
+     * OWN matching flavour -- the low end (armor.txt "minac") through the min-flavoured
+     * armourTriple, the high end ("maxac") through the max-flavoured one, per the parent task's own
+     * spec (simpler than the weapon-damage treatment below: armor's formula produces only ONE
+     * number per call, so there is no second "which flavour computed which side" cross-product to
+     * build) -- plus "Chance to Block: " when armor.txt's own "block" column is populated (shields
+     * only, in practice; NOT modified here -- iBlock's own modifier, D2Item.applyItemMods()'s pNum
+     * 20 shield-block bonus, is out of scope for this change, unmentioned by the parent task). A
+     * weapon/misc base simply has neither Defense column, so this contributes nothing for those --
+     * no table lookup needed to tell them apart.
+     */
+    private static void appendArmorStats(StringBuilder pHtml, D2TxtFileItemProperties pRow,
+                                          ItemModifiers pMinMods, ItemModifiers pMaxMods) {
         Integer lMinAc = parseIntOrNull(pRow.get("minac"));
         Integer lMaxAc = parseIntOrNull(pRow.get("maxac"));
         if (lMinAc != null || lMaxAc != null) {
             pHtml.append("Defense: ");
-            if (lMinAc != null && lMaxAc != null && !lMinAc.equals(lMaxAc)) {
-                pHtml.append(lMinAc).append(" - ").append(lMaxAc);
+            if (lMinAc != null && lMaxAc != null) {
+                int lA = applyArmorFormula(lMinAc, pMinMods);
+                int lB = applyArmorFormula(lMaxAc, pMaxMods);
+                if (lA != lB) {
+                    pHtml.append(lA).append(" - ").append(lB);
+                } else {
+                    pHtml.append(lA);
+                }
             } else {
-                pHtml.append(lMinAc != null ? lMinAc : lMaxAc);
+                // A one-ended base row (not observed in practice) has only one flavour's worth of
+                // modifiers to apply to it; apply that same single flavour to the one value that
+                // exists rather than guessing which of min/max it was meant to pair with.
+                Integer lOnlyBase = lMinAc != null ? lMinAc : lMaxAc;
+                pHtml.append(applyArmorFormula(lOnlyBase, pMinMods));
             }
             pHtml.append("<br>&#10;");
         }
@@ -473,6 +692,16 @@ public class D2GrailListRenderer extends JLabel implements ListCellRenderer<Obje
     }
 
     /**
+     * D2Item.applyItemMods()'s own armor formula: {@code floor(baseDef/100.0*armourTriple[0] +
+     * (baseDef+armourTriple[1]+armourTriple[2]))} (D2Item.java's iDef assignment) -- EDef percent
+     * against the base, plus flat +Def and +Def/lvl (already level-scaled by applyOp(), not scaled
+     * again here).
+     */
+    private static int applyArmorFormula(int pBaseDef, ItemModifiers pMods) {
+        return applyPercentPlusFlat(pBaseDef, pMods.iArmourTriple[0], pMods.iArmourTriple[1] + pMods.iArmourTriple[2]);
+    }
+
+    /**
      * Damage ranges, mirroring D2ItemRenderer's own hand logic (generatePropStringNoHtmlTags) but
      * driven by weapons.txt column presence instead of a parsed item's iWhichHand/isiThrow(): a
      * javelin's "minmisdam"/"maxmisdam" are simply populated alongside plain "mindam"/"maxdam" (and
@@ -484,44 +713,111 @@ public class D2GrailListRenderer extends JLabel implements ListCellRenderer<Obje
      * not "mindam"/"maxdam" -- confirmed against D2Item.java's own readExtend2, which loads exactly
      * that column pair into the value it renders as "Two Hand Damage: " for this case.
      */
-    private static void appendWeaponStats(StringBuilder pHtml, D2TxtFileItemProperties pRow) {
-        appendDamageRange(pHtml, "Throw Damage: ", parseIntOrNull(pRow.get("minmisdam")), parseIntOrNull(pRow.get("maxmisdam")));
+    private static void appendWeaponStats(StringBuilder pHtml, D2TxtFileItemProperties pRow,
+                                           ItemModifiers pMinMods, ItemModifiers pMaxMods) {
+        appendDamageRange(pHtml, "Throw Damage: ", parseIntOrNull(pRow.get("minmisdam")), parseIntOrNull(pRow.get("maxmisdam")), pMinMods, pMaxMods);
 
         if ("1".equals(pRow.get("1or2handed"))) {
-            appendDamageRange(pHtml, "One Hand Damage: ", parseIntOrNull(pRow.get("mindam")), parseIntOrNull(pRow.get("maxdam")));
-            appendDamageRange(pHtml, "Two Hand Damage: ", parseIntOrNull(pRow.get("2handmindam")), parseIntOrNull(pRow.get("2handmaxdam")));
+            appendDamageRange(pHtml, "One Hand Damage: ", parseIntOrNull(pRow.get("mindam")), parseIntOrNull(pRow.get("maxdam")), pMinMods, pMaxMods);
+            appendDamageRange(pHtml, "Two Hand Damage: ", parseIntOrNull(pRow.get("2handmindam")), parseIntOrNull(pRow.get("2handmaxdam")), pMinMods, pMaxMods);
         } else if ("1".equals(pRow.get("2handed"))) {
-            appendDamageRange(pHtml, "Two Hand Damage: ", parseIntOrNull(pRow.get("2handmindam")), parseIntOrNull(pRow.get("2handmaxdam")));
+            appendDamageRange(pHtml, "Two Hand Damage: ", parseIntOrNull(pRow.get("2handmindam")), parseIntOrNull(pRow.get("2handmaxdam")), pMinMods, pMaxMods);
         } else {
-            appendDamageRange(pHtml, "One Hand Damage: ", parseIntOrNull(pRow.get("mindam")), parseIntOrNull(pRow.get("maxdam")));
+            appendDamageRange(pHtml, "One Hand Damage: ", parseIntOrNull(pRow.get("mindam")), parseIntOrNull(pRow.get("maxdam")), pMinMods, pMaxMods);
         }
     }
 
-    private static void appendDamageRange(StringBuilder pHtml, String pLabel, Integer pMin, Integer pMax) {
+    /**
+     * One weapon damage line, e.g. "One Hand Damage: 148-185 to 357-500" (Wrath of the Seraphim,
+     * verified by hand against D2Item.applyItemMods() -- see computeWeaponDamage()'s javadoc). Runs
+     * the base (pMin, pMax) pair through D2Item.applyItemMods()'s own weapon-damage formula TWICE
+     * -- once entirely under the min-flavoured modifiers, once entirely under the max-flavoured
+     * ones -- because that formula itself produces BOTH a low and a high damage number from ONE set
+     * of modifiers (exactly as it does for a real item's i1Dmg[1]/i1Dmg[3]). The four resulting
+     * numbers then pair up as TWO sides, each formatted independently via formatModifiedValue:
+     * "[low damage under min-flavour]-[low damage under max-flavour]" is the min-damage side,
+     * "[high damage under min-flavour]-[high damage under max-flavour]" is the max-damage side.
+     * <p>
+     * When BOTH sides collapse to a single number (an item with no damage-modifying property at
+     * all -- dmgTriple all zero in both flavours, so both flavours' formula outputs equal the
+     * plain base numbers) this reproduces today's exact "pMin - pMax" format, " - " and all, so an
+     * unaffected item's line is byte-identical to before this change. Otherwise the two sides are
+     * joined with " to ", e.g. "148-185 to 357-500" -- each side may itself be a single number or a
+     * "low-high" range independently (an item might modify only the min or only the max end).
+     */
+    private static void appendDamageRange(StringBuilder pHtml, String pLabel, Integer pMin, Integer pMax,
+                                           ItemModifiers pMinMods, ItemModifiers pMaxMods) {
         if (pMin == null && pMax == null) {
             return;
         }
         pHtml.append(pLabel);
         if (pMin != null && pMax != null) {
-            pHtml.append(pMin).append(" - ").append(pMax);
+            int[] lFromMinFlavour = computeWeaponDamage(pMin, pMax, pMinMods);
+            int[] lFromMaxFlavour = computeWeaponDamage(pMin, pMax, pMaxMods);
+            boolean lBothSidesSingle = lFromMinFlavour[0] == lFromMaxFlavour[0] && lFromMinFlavour[1] == lFromMaxFlavour[1];
+            if (lBothSidesSingle) {
+                pHtml.append(lFromMinFlavour[0]).append(" - ").append(lFromMinFlavour[1]);
+            } else {
+                String lMinSide = formatModifiedValue(lFromMinFlavour[0], lFromMaxFlavour[0]);
+                String lMaxSide = formatModifiedValue(lFromMinFlavour[1], lFromMaxFlavour[1]);
+                pHtml.append(lMinSide).append(" to ").append(lMaxSide);
+            }
         } else {
+            // A one-ended base row (not observed in practice, but the pre-existing fallback this
+            // replaces already handled it defensively) -- D2Item.applyItemMods()'s own formula
+            // needs BOTH ends of the base range to run at all, so a lone end is shown unmodified,
+            // exactly as it always was.
             pHtml.append(pMin != null ? pMin : pMax);
         }
         pHtml.append("<br>&#10;");
     }
 
     /**
-     * The base maximum durability, or "Indestructible" when "nodurability" is set -- never a
-     * "current of max" figure, since a missing entry has no instance to have taken wear on.
+     * D2Item.applyItemMods()'s own weapon-damage formula (D2Item.java's i1Dmg[1]/i1Dmg[3]
+     * assignment), run against ONE flavour's modifiers:
+     * <pre>
+     *   min = floor(baseMin/100.0 * dmgTriple[0] + (baseMin + dmgTriple[1]))
+     *   max = floor(baseMax/100.0 * (dmgTriple[0] + dmgTriple[4]) + (baseMax + dmgTriple[2] + dmgTriple[3]))
+     *   if (min > max) { max = min + 1; }
+     * </pre>
+     * Verified by hand against Wrath of the Seraphim (base 7ws, weapons.txt mindam=37, maxdam=43)
+     * at ASSUMED_CHARACTER_LEVEL 99, whose prop1 "dmg%" (300-400), prop2 "dmg-max" (100-200) and
+     * prop5 "dmg%/lvl" (par=16, -> 198 in BOTH flavours, already level-scaled by applyOp() before
+     * this method ever runs) resolve to dmgTriple[0]=300/400 and dmgTriple[2]=100/200
+     * (min-/max-flavoured respectively) and dmgTriple[4]=198 (both flavours): min-flavoured ->
+     * (148, 357), max-flavoured -> (185, 500) -- matching the mod's own website's "148-185" low end
+     * exactly (the website's "345-501" high end differs only because it assumes a different
+     * character level for the per-level stat, not a defect in this formula).
      */
-    private static void appendDurability(StringBuilder pHtml, D2TxtFileItemProperties pRow) {
+    private static int[] computeWeaponDamage(int pBaseMin, int pBaseMax, ItemModifiers pMods) {
+        int lMin = applyPercentPlusFlat(pBaseMin, pMods.iDmgTriple[0], pMods.iDmgTriple[1]);
+        int lMax = applyPercentPlusFlat(pBaseMax, pMods.iDmgTriple[0] + pMods.iDmgTriple[4], pMods.iDmgTriple[2] + pMods.iDmgTriple[3]);
+        if (lMin > lMax) {
+            lMax = lMin + 1;
+        }
+        return new int[]{lMin, lMax};
+    }
+
+    /**
+     * The base maximum durability, or "Indestructible" when "nodurability" is set (never modified
+     * -- an indestructible item has no maximum to raise) -- never a "current of max" figure, since
+     * a missing entry has no instance to have taken wear on. Otherwise D2Item.applyItemMods()'s own
+     * durability formula (D2Item.java's iMaxDur assignment, {@code floor(maxDur/100.0*durTriple[1]
+     * + (maxDur+durTriple[0]))}) is run once per flavour against the base "durability" column, then
+     * formatted the same "single value, or low-high when the flavours differ" way as every other
+     * single-base-value stat below (Required Level/Strength/Dexterity).
+     */
+    private static void appendDurability(StringBuilder pHtml, D2TxtFileItemProperties pRow,
+                                          ItemModifiers pMinMods, ItemModifiers pMaxMods) {
         if ("1".equals(pRow.get("nodurability"))) {
             pHtml.append("Indestructible<br>&#10;");
             return;
         }
         Integer lDurability = parseIntOrNull(pRow.get("durability"));
         if (lDurability != null) {
-            pHtml.append("Durability: ").append(lDurability).append("<br>&#10;");
+            int lLow = applyPercentPlusFlat(lDurability, pMinMods.iDurTriple[1], pMinMods.iDurTriple[0]);
+            int lHigh = applyPercentPlusFlat(lDurability, pMaxMods.iDurTriple[1], pMaxMods.iDurTriple[0]);
+            pHtml.append("Durability: ").append(formatModifiedValue(lLow, lHigh)).append("<br>&#10;");
         }
     }
 
@@ -634,65 +930,430 @@ public class D2GrailListRenderer extends JLabel implements ListCellRenderer<Obje
 
         for (int x = 1; x <= 5; x++) {
             int lThreshold = x + 1; // aprop1x/PCode2x is the "2 items" bonus, ... aprop5x/PCode6x is "6 items"
-            D2PropCollection lThresholdProps = new D2PropCollection();
+            List<PropSlot> lSlots = new ArrayList<PropSlot>();
             if (pItemRow != null) {
-                addPropIfPresent(lThresholdProps, pItemRow,
+                addSlotIfPresent(lSlots, pItemRow,
                         "aprop" + x + "a", "amin" + x + "a", "amax" + x + "a", "apar" + x + "a");
-                addPropIfPresent(lThresholdProps, pItemRow,
+                addSlotIfPresent(lSlots, pItemRow,
                         "aprop" + x + "b", "amin" + x + "b", "amax" + x + "b", "apar" + x + "b");
             }
             if (lFullSetRow != null) {
-                addPropIfPresent(lThresholdProps, lFullSetRow,
+                addSlotIfPresent(lSlots, lFullSetRow,
                         "PCode" + lThreshold + "a", "PMin" + lThreshold + "a", "PMax" + lThreshold + "a",
                         "PParam" + lThreshold + "a");
             }
-            if (lThresholdProps.isEmpty()) {
+            if (lSlots.isEmpty()) {
                 continue;
             }
-            lThresholdProps.tidy();
-            // See ASSUMED_CHARACTER_LEVEL's javadoc: applyOp() is what actually does the per-level
-            // math (e.g. Cleglaw's Pincers' aprop1a "att/lvl" par=20 -> "+850" at level 85) --
+            // See ASSUMED_CHARACTER_LEVEL's javadoc: applyOp() (run inside renderSlotsWithRanges,
+            // for both the min- and max-flavoured pass) is what actually does the per-level math
+            // (e.g. Cleglaw's Pincers' aprop1a "att/lvl" par=20 -> "+850" at level 85) --
             // generateDisplay() alone never scales anything by level.
-            lThresholdProps.applyOp(ASSUMED_CHARACTER_LEVEL);
             pHtml.append("<font color='red'>Set (").append(lThreshold).append(" items): </font>")
-                    .append(lThresholdProps.generateDisplay(0, ASSUMED_CHARACTER_LEVEL));
+                    .append(renderSlotsWithRanges(lSlots));
         }
 
         if (lFullSetRow != null) {
-            D2PropCollection lFullSetProps = new D2PropCollection();
+            List<PropSlot> lSlots = new ArrayList<PropSlot>();
             for (int i = 1; i <= 8; i++) {
-                addPropIfPresent(lFullSetProps, lFullSetRow, "FCode" + i, "FMin" + i, "FMax" + i, "FParam" + i);
+                addSlotIfPresent(lSlots, lFullSetRow, "FCode" + i, "FMin" + i, "FMax" + i, "FParam" + i);
             }
-            if (!lFullSetProps.isEmpty()) {
-                lFullSetProps.tidy();
-                lFullSetProps.applyOp(ASSUMED_CHARACTER_LEVEL);
+            if (!lSlots.isEmpty()) {
                 pHtml.append("<font color='red'>Full Set Bonus: </font>")
-                        .append(lFullSetProps.generateDisplay(0, ASSUMED_CHARACTER_LEVEL));
+                        .append(renderSlotsWithRanges(lSlots));
             }
         }
     }
 
     /**
-     * Reads one property slot (a code column plus its matching min/max/param columns) off a .txt
-     * row and, if the code is non-empty, converts it through D2TxtFile.propToStat -- the same
-     * conversion the item's own base properties above use -- into pInto. A blank code (no bonus in
-     * that slot) or a code propToStat can't resolve are both silently skipped rather than either
-     * one aborting every other slot in the same section.
+     * One property slot's four raw .txt columns (code, min, max, param), captured BEFORE any
+     * conversion through D2TxtFile.propToStat(). A missing entry's tooltip needs to run
+     * propToStat() twice per slot -- once "min-flavoured", once "max-flavoured" (see
+     * renderSlotsWithRanges) -- so the raw columns are kept around as plain strings here rather
+     * than immediately resolved into a single D2Prop the way the item-parsing path
+     * (D2Item/D2PropCollection, both left untouched by this change) does.
      */
-    private static void addPropIfPresent(D2PropCollection pInto, D2TxtFileItemProperties pRow,
+    private static final class PropSlot {
+        private final String iCode;
+        private final String iMin;
+        private final String iMax;
+        private final String iParam;
+
+        private PropSlot(String pCode, String pMin, String pMax, String pParam) {
+            iCode = pCode;
+            iMin = pMin;
+            iMax = pMax;
+            iParam = pParam;
+        }
+    }
+
+    /**
+     * Reads one property slot (a code column plus its matching min/max/param columns) off a .txt
+     * row and, if the code is non-empty, adds its RAW columns to pInto as a PropSlot -- unmodified,
+     * exactly as they appear in the .txt row. A blank code (no bonus in that slot) is silently
+     * skipped, exactly as the old single-pass addPropIfPresent this replaces did.
+     * <p>
+     * Deliberately no normalization here: whether (and how) a slot's min/max columns get adjusted
+     * before propToStat() sees them depends on whether this code's columns are even a real
+     * min/max PAIR in the first place (properties.txt's own "uiRangeType" column) -- a decision
+     * renderSlotsWithRanges makes per-slot, using these untouched raw strings, not this method.
+     */
+    private static void addSlotIfPresent(List<PropSlot> pInto, D2TxtFileItemProperties pRow,
                                           String pCodeColumn, String pMinColumn, String pMaxColumn, String pParamColumn) {
         String lCode = pRow.get(pCodeColumn);
         if (lCode == null || lCode.isEmpty()) {
             return;
         }
-        try {
-            ArrayList lStats = D2TxtFile.propToStat(
-                    lCode, pRow.get(pMinColumn), pRow.get(pMaxColumn), pRow.get(pParamColumn), 0);
-            //noinspection unchecked
-            pInto.addAll(lStats);
-        } catch (RuntimeException pEx) {
-            // One malformed property slot must not blank out every other real one.
+        pInto.add(new PropSlot(lCode, nullToEmpty(pRow.get(pMinColumn)), nullToEmpty(pRow.get(pMaxColumn)),
+                pRow.get(pParamColumn)));
+    }
+
+    /**
+     * True when properties.txt's own "uiRangeType" column for this code is blank -- the mod's own
+     * table saying its "min"/"max" columns really are the two ends of ONE ranged number, safe to
+     * feed through the two-pass min-flavoured/max-flavoured machinery below. Confirmed blank (and
+     * therefore eligible) for every code this feature actually needs to range: dmg%, dmg-max,
+     * dmg-min, res-cold, lifesteal, cheap, and so on.
+     * <p>
+     * A non-blank uiRangeType documents the two columns as something else entirely -- confirmed
+     * against real properties.txt rows: 7 (hit-skill, death-skill) is "% Chance" + "Skill Level",
+     * 6 (charged) is "# of Max Charges" + "Skill Level", 2 (skill-rand) is "Min Skill ID" + "Max
+     * Skill ID", 5 (skill, oskill) is a skill LEVEL range whose skill id lives in a separate "par"
+     * column. None of those pairs are "the low end and the high end of one number" -- merging them
+     * as if they were invents nonsense: uniqueitems.txt's real "Fallen Hero's Disgrace" prop8
+     * "death-skill" (min=100 "% Chance", max=15 "Skill Level") is not a "15-100" or "100-15" range
+     * of anything, and a hit-skill row whose chance happens to be numerically lower than its skill
+     * level (e.g. chance 5, level 10) would otherwise merge into an equally bogus invented "5-10".
+     * So a non-blank uiRangeType is NOT eligible; renderSlotsWithRanges falls back to feeding that
+     * slot's original, unmodified columns to both passes instead, reproducing today's single
+     * collapsed value exactly.
+     * <p>
+     * uiRangeType 5 (skill/oskill, the level-range-plus-separate-skill-id shape) is deliberately
+     * excluded rather than "fixed and then ranged": that pairing is already fed to propToStat
+     * wrong in a completely separate, pre-existing way (propToStat always zeroes pVals[2] before
+     * building the D2Prop, so the skill id that "par" carries is lost, and D2Prop ends up reading
+     * pVals[0] -- the level -- as if it were the skill id). This method's job is only to decide
+     * what is safe to RANGE; layering a range on top of that unrelated bug is out of scope, so
+     * excluding uiRangeType 5 here simply keeps producing today's (already imperfect) output,
+     * unchanged, rather than making it worse.
+     * <p>
+     * A SECOND, independent exclusion, on top of uiRangeType: properties.txt's own func1/func2
+     * columns can encode "min feeds one stat, max feeds a DIFFERENT stat" -- func1=15 paired with
+     * func2=16 -- even when uiRangeType is blank. Confirmed against every ./d2111 code used with
+     * min&lt;max and a non-empty stat2, with no overlap between the two families:
+     * <ul>
+     *   <li>func1=15/func2=16 -- min and max are NEVER a range, always two distinct stats: real
+     *   codes "dmg-norm" (stat1=mindamage, stat2=maxdamage), "dmg-fire"/"dmg-cold"/"dmg-ltng"/
+     *   "dmg-mag"/"dmg-elem"/"dmg-pois" (the same min-stat/max-stat shape, one pair per element).
+     *   Confirmed live: uniqueitems.txt's real "Hand of Blessed Light" prop7 "dmg-norm" (min=20,
+     *   max=45) is NOT "the item adds a randomly-rolled 20-45 damage bonus" -- it is "+20 to
+     *   Minimum Damage AND +45 to Maximum Damage, always both, every time" -- so ranging it merged
+     *   the min-flavoured pass's "Adds 20 - 20 Damage" and the max-flavoured pass's "Adds 45 - 45
+     *   Damage" into the doubled garbage "Adds 20-45 - 20-45 Damage"; excluding it instead feeds
+     *   both passes the SAME original (20, 45) pair, restoring today's correct, pre-existing
+     *   "Adds 20 - 45 Damage" (D2Prop's own combined-damage rendering, not this class's range
+     *   merge) -- and, in turn, correctly feeds dmgTriple[1]=20/dmgTriple[2]=45 identically into
+     *   BOTH flavours' weapon-damage base-stat computation (accumulateItemMods), exactly what a
+     *   found copy of the same item yields from its bitstream.</li>
+     *   <li>func1=1 or 21, func2=3 -- a genuine range: the SAME single rolled value is copied to
+     *   several stats at once (e.g. one resistance roll applied to all four elements). Real codes:
+     *   "res-all"/"res-all-max"/"all-stats" (a plain func1=1 stat1, then func2=3/func3=3/func4=3
+     *   copying the identical value to sibling stats), "fireskill"/"lightningskill"/"magicskill"
+     *   (func1=21 stat1=item_elemskill, func2=3 stat2=item_elemskill&lt;element&gt;), "pierce-elem"/
+     *   "extra-elem" (func1=1, func2/3/4=3). These stay eligible -- deliberately NOT excluded by
+     *   this second check, since their min/max genuinely are one ranged roll.</li>
+     * </ul>
+     * Keyed on func1/func2 directly, NOT on stat1/stat2's NAMES containing "min"/"max": a
+     * name-based rule would misclassify "res-all-max" (a genuine range, family B above) purely
+     * because its stat1 happens to be named "maxfireresist".
+     * <p>
+     * A code with no properties.txt row at all -- should not happen for anything that already
+     * survived a real propToStat() call, but defended against here anyway, the same way
+     * D2TxtFile.propToStat() itself treats a null PROPS row as "give up, don't guess" -- is treated
+     * as NOT eligible: an unknown shape must never be assumed safe to merge.
+     */
+    private static boolean isRangeEligible(String pCode) {
+        D2TxtFileItemProperties lPropsRow = D2TxtFile.PROPS.searchColumns("code", pCode);
+        if (lPropsRow == null) {
+            return false;
         }
+        String lUiRangeType = lPropsRow.get("uiRangeType");
+        if (lUiRangeType != null && !lUiRangeType.isEmpty()) {
+            return false;
+        }
+        // "15"/"16" are properties.txt's own func-column CODES for "write the min column into
+        // stat1" / "write the max column into stat2" -- i.e. two DIFFERENT stats, never a range.
+        return !("15".equals(lPropsRow.get("func1")) && "16".equals(lPropsRow.get("func2")));
+    }
+
+    // The literal separator D2PropCollection.generateDisplay() puts after every rendered line --
+    // see its source: "arrOut.append(val).append(\"<br>&#10;\")" -- reused here, rather than
+    // re-deriving it, as both the split delimiter and the re-join glue in mergeRangeFragments.
+    private static final String LINE_SEPARATOR = "<br>&#10;";
+
+    // Matches one signed integer token -- the unit mergeRangeFragments merges independently within
+    // an otherwise-identical line (e.g. the "300" and "400" in "+300-400% Enhanced Damage").
+    private static final Pattern NUMBER_TOKEN = Pattern.compile("-?\\d+");
+
+    /**
+     * Renders a list of raw property slots as a RANGE where the underlying .txt row actually has
+     * one ("+300-400% Enhanced Damage", the mod's own website convention), rather than
+     * D2TxtFile.propToStat()'s single collapsed value -- without changing propToStat() or
+     * D2PropCollection themselves, since both are shared with the real-item parsing path (a found
+     * item has one real rolled value, not a range, and must keep rendering exactly as it does
+     * today).
+     * <p>
+     * Runs the whole propToStat -> tidy() -> applyOp() -> generateDisplay() pipeline TWICE for
+     * every slot whose properties.txt code is actually range-eligible (isRangeEligible -- a blank
+     * "uiRangeType" column, meaning its min/max columns really are the two ends of one number):
+     * once feeding the slot's MIN column as both the "min" and "max" argument (so propToStat's own
+     * "pVals[0] = pVals[1]" max-collapsing branch becomes a no-op and every stat resolves to its
+     * low end, regardless of which branch propToStat takes for that particular stat), once feeding
+     * the slot's MAX column the same way. Before either call, a lone blank end is normalized to
+     * match its non-blank sibling -- confirmed real: Gheed's Wager prop8 "cheap" (min=10, max
+     * blank) would otherwise have its max-flavoured pass call propToStat(code, "", "", param, 0),
+     * both arguments blank, resolving to a bare 0 (propToStat's own "pVals[0]=0 default, nothing
+     * assigns it" path) rather than "the top of the real range" -- and then merge min=10/max=0 into
+     * a backwards-range fallback that regresses the real, correct "10% Reduced Vendor Prices" down
+     * to "0%". A slot with BOTH columns blank (a genuine per-level property -- e.g. Wrath of the
+     * Seraphim's own "dmg%/lvl" par=16, min/max both absent, the value carried in "par" instead) is
+     * left untouched by this normalization: propToStat's per-level branch requires min AND max to
+     * both still be "" to fire at all, so normalizing either one away would break every per-level
+     * property's own display instead. Either way, a range-eligible slot with equal ends (the
+     * overwhelmingly common case) simply produces the same value from both passes.
+     * <p>
+     * A slot whose code is NOT range-eligible (isRangeEligible false -- its min/max columns are
+     * documented as something other than one ranged number, e.g. hit-skill's "% Chance" + "Skill
+     * Level") instead feeds its ORIGINAL, unmodified min AND max columns to BOTH passes -- the
+     * exact single-pass propToStat(code, min, max, param, 0) call this whole feature's
+     * predecessor, addPropIfPresent, always made -- so it renders byte-for-byte as it always has,
+     * never a range, never a changed value.
+     * <p>
+     * The two resulting HTML fragments are then merged line-by-line, number-by-number (see
+     * mergeRangeFragments): identical fragments (every ineligible slot, plus every eligible slot
+     * whose ends happen to be equal -- together the overwhelming majority) come back unchanged,
+     * and only the numbers that actually differ turn into "min-max"/"min to max" text, never
+     * touching the surrounding markup or label text.
+     * <p>
+     * Split into buildFlavouredProps() (this method delegates to it) and renderFlavouredProps()
+     * so a caller that also needs the base-stat modifier accumulation (missingTooltip, for its
+     * item's own prop1..N -- see appendMissingBaseStats) can build the two collections ONCE and
+     * use them for both jobs, rather than this method's own callers (the set-bonus sections, which
+     * never feed into base-stat modifiers -- see missingTooltip's own javadoc note on why) needing
+     * to care about that split at all.
+     */
+    private static String renderSlotsWithRanges(List<PropSlot> pSlots) {
+        return renderFlavouredProps(buildFlavouredProps(pSlots));
+    }
+
+    /**
+     * One property section's two flavoured D2PropCollections -- the min-flavoured and
+     * max-flavoured passes described on renderSlotsWithRanges, already tidy()'d and applyOp()'d,
+     * but not yet rendered to HTML. Exists so a caller can reuse the SAME two collections for more
+     * than one job (missingTooltip does: once for its base-stat lines' modifier accumulation via
+     * accumulateItemMods(), once for the property lines themselves via renderFlavouredProps())
+     * without running propToStat/tidy/applyOp twice over.
+     */
+    private static final class FlavouredProps {
+        private final D2PropCollection iMin;
+        private final D2PropCollection iMax;
+
+        private FlavouredProps(D2PropCollection pMin, D2PropCollection pMax) {
+            iMin = pMin;
+            iMax = pMax;
+        }
+    }
+
+    /**
+     * Builds the two flavoured D2PropCollections described on renderSlotsWithRanges's javadoc
+     * (min-flavoured and max-flavoured, each range-eligibility-checked, blank-column-normalized,
+     * tidy()'d and applyOp()'d) without rendering them to HTML yet -- see FlavouredProps and
+     * renderFlavouredProps.
+     */
+    private static FlavouredProps buildFlavouredProps(List<PropSlot> pSlots) {
+        D2PropCollection lMinProps = new D2PropCollection();
+        D2PropCollection lMaxProps = new D2PropCollection();
+        for (int i = 0; i < pSlots.size(); i++) {
+            PropSlot lSlot = pSlots.get(i);
+            try {
+                // Both calls must succeed, or neither is kept: keeping only one pass's resolution
+                // of a slot that throws on the other pass would desync the min/max fragments' line
+                // counts, sending mergeRangeFragments down its "different piece counts" whole-
+                // fragment fallback for every OTHER slot in the same section too, not just the one
+                // that actually failed.
+                ArrayList lMinStats;
+                ArrayList lMaxStats;
+                if (isRangeEligible(lSlot.iCode)) {
+                    String lMinArg = lSlot.iMin;
+                    String lMaxArg = lSlot.iMax;
+                    if (lMinArg.isEmpty() && !lMaxArg.isEmpty()) {
+                        lMinArg = lMaxArg;
+                    } else if (lMaxArg.isEmpty() && !lMinArg.isEmpty()) {
+                        lMaxArg = lMinArg;
+                    }
+                    lMinStats = D2TxtFile.propToStat(lSlot.iCode, lMinArg, lMinArg, lSlot.iParam, 0);
+                    lMaxStats = D2TxtFile.propToStat(lSlot.iCode, lMaxArg, lMaxArg, lSlot.iParam, 0);
+                } else {
+                    // Not a real min/max pair (see isRangeEligible) -- both passes get the row's
+                    // own original columns, unmodified, so they resolve to identical D2Props and
+                    // this slot renders exactly as the old single collapsed-value pass always did.
+                    lMinStats = D2TxtFile.propToStat(lSlot.iCode, lSlot.iMin, lSlot.iMax, lSlot.iParam, 0);
+                    lMaxStats = D2TxtFile.propToStat(lSlot.iCode, lSlot.iMin, lSlot.iMax, lSlot.iParam, 0);
+                }
+                //noinspection unchecked
+                lMinProps.addAll(lMinStats);
+                //noinspection unchecked
+                lMaxProps.addAll(lMaxStats);
+            } catch (RuntimeException pEx) {
+                // One malformed property slot must not blank out every other real one.
+            }
+        }
+        lMinProps.tidy();
+        lMinProps.applyOp(ASSUMED_CHARACTER_LEVEL);
+        lMaxProps.tidy();
+        lMaxProps.applyOp(ASSUMED_CHARACTER_LEVEL);
+        return new FlavouredProps(lMinProps, lMaxProps);
+    }
+
+    /**
+     * Renders an already-built FlavouredProps to HTML: generateDisplay() on each of the two
+     * collections (read-only -- safe to call more than once on the same FlavouredProps, unlike
+     * tidy()/applyOp(), which buildFlavouredProps already ran exactly once each), then merged via
+     * mergeRangeFragments.
+     */
+    private static String renderFlavouredProps(FlavouredProps pProps) {
+        String lMinHtml = pProps.iMin.generateDisplay(0, ASSUMED_CHARACTER_LEVEL).toString();
+        String lMaxHtml = pProps.iMax.generateDisplay(0, ASSUMED_CHARACTER_LEVEL).toString();
+        return mergeRangeFragments(lMinHtml, lMaxHtml);
+    }
+
+    /**
+     * Merges a "min-flavoured" and a "max-flavoured" D2PropCollection.generateDisplay() fragment
+     * (each shaped {@code <font color="...">line<br>&#10;line<br>&#10;</font>}) into one fragment
+     * that shows a real range wherever the two disagree. Package-private (not private) so
+     * D2GrailListRendererRangeTest can exercise it directly, alongside the higher-level
+     * D2GrailListRenderer.tooltipFor() coverage.
+     * <p>
+     * The common case -- most stats have no min/max spread at all -- short-circuits on equality.
+     * Otherwise the two fragments are split into lines and merged line-by-line (mergeLinePiece);
+     * a mismatched line COUNT between the two passes (should not happen given the identical
+     * propToStat/tidy/applyOp pipeline run on each side, but a future propToStat change could in
+     * principle make min and max resolve to a different number of D2Props) falls back to the max
+     * fragment whole, rather than risk zipping unrelated lines together.
+     */
+    static String mergeRangeFragments(String pMinFragment, String pMaxFragment) {
+        if (pMinFragment.equals(pMaxFragment)) {
+            return pMaxFragment;
+        }
+        String[] lMinPieces = pMinFragment.split(Pattern.quote(LINE_SEPARATOR), -1);
+        String[] lMaxPieces = pMaxFragment.split(Pattern.quote(LINE_SEPARATOR), -1);
+        if (lMinPieces.length != lMaxPieces.length) {
+            return pMaxFragment;
+        }
+        StringBuilder lOut = new StringBuilder();
+        for (int i = 0; i < lMinPieces.length; i++) {
+            if (i > 0) {
+                lOut.append(LINE_SEPARATOR);
+            }
+            lOut.append(mergeLinePiece(lMinPieces[i], lMaxPieces[i]));
+        }
+        return lOut.toString();
+    }
+
+    /**
+     * Merges one min/max pair of same-position pieces (one rendered line, or the leading
+     * "&lt;font...&gt;"-plus-first-line / trailing "&lt;/font&gt;" pieces the split in
+     * mergeRangeFragments produces at the ends of the fragment). Tokenizes both sides into
+     * alternating literal/number tokens (tokenize()); if the token counts differ, or ANY literal
+     * token differs between the two sides (different property resolved, different wording, a
+     * property that appeared in one pass but not the other -- any of which means these two pieces
+     * are no longer "the same line at its two ends"), the max piece is returned unchanged rather
+     * than splicing mismatched text together. Otherwise every literal passes through verbatim and
+     * every number position is merged via mergeNumberToken.
+     */
+    static String mergeLinePiece(String pMinPiece, String pMaxPiece) {
+        List<String> lMinTokens = tokenize(pMinPiece);
+        List<String> lMaxTokens = tokenize(pMaxPiece);
+        if (lMinTokens.size() != lMaxTokens.size()) {
+            return pMaxPiece;
+        }
+        // Token lists alternate literal, number, literal, ..., literal (always odd length, per
+        // tokenize()'s own contract) -- so every EVEN index is a literal; check all of them before
+        // building anything, since one mismatched literal anywhere in the piece disqualifies the
+        // whole piece, not just the number tokens around it.
+        for (int i = 0; i < lMinTokens.size(); i += 2) {
+            if (!lMinTokens.get(i).equals(lMaxTokens.get(i))) {
+                return pMaxPiece;
+            }
+        }
+        StringBuilder lOut = new StringBuilder();
+        for (int i = 0; i < lMinTokens.size(); i++) {
+            if (i % 2 == 0) {
+                lOut.append(lMinTokens.get(i)); // literal, already confirmed identical above
+            } else {
+                lOut.append(mergeNumberToken(lMinTokens.get(i), lMaxTokens.get(i)));
+            }
+        }
+        return lOut.toString();
+    }
+
+    /**
+     * Splits pText into alternating literal/number tokens around every signed-integer match (e.g.
+     * "+300-400% Enhanced Damage" against NUMBER_TOKEN's own "-?\d+" -- deliberately the same
+     * pattern text, not reused as a shared constant with anything in D2Prop, since the two never
+     * need to agree on the regex source, only on matching what a rendered number actually looks
+     * like). The result always has odd length -- literal, number, literal, ..., literal -- even
+     * when pText has no digits at all (a single-element list, the whole text as one literal) or
+     * starts/ends with a digit (an empty leading/trailing literal).
+     */
+    private static List<String> tokenize(String pText) {
+        List<String> lTokens = new ArrayList<String>();
+        Matcher lMatcher = NUMBER_TOKEN.matcher(pText);
+        int lLastEnd = 0;
+        while (lMatcher.find()) {
+            lTokens.add(pText.substring(lLastEnd, lMatcher.start()));
+            lTokens.add(lMatcher.group());
+            lLastEnd = lMatcher.end();
+        }
+        lTokens.add(pText.substring(lLastEnd));
+        return lTokens;
+    }
+
+    /**
+     * Merges one min/max pair of number tokens into the text that should appear at that position:
+     * <ul>
+     *   <li>Equal strings (the overwhelmingly common case: most stats have no range at all) ->
+     *   that value, unchanged.</li>
+     *   <li>Both parse as non-negative ints with min &lt; max -> "min-max" (e.g. "300-400"),
+     *   matching the mod's own website convention (confirmed against Wrath of the Seraphim's real
+     *   dmg% 300/400 -> "+300-400% Enhanced Damage").</li>
+     *   <li>Either value is negative -> "min to max" (e.g. Cold Rupture's real res-cold -90/-70 ->
+     *   "-90 to -70"), never the literal min+"-"+max concatenation: "-10"+"-"+"-20" would read as
+     *   the unreadable, ambiguous "-10--20".</li>
+     *   <li>min &gt; max (a non-negative pair that resolved backwards -- e.g. one side's slot
+     *   normalization or propToStat's own quirks produced a decreasing pair) or either token fails
+     *   to parse as an int at all -> the max token alone, never an invented backwards range.</li>
+     * </ul>
+     */
+    static String mergeNumberToken(String pMinToken, String pMaxToken) {
+        if (pMinToken.equals(pMaxToken)) {
+            return pMinToken;
+        }
+        int lMin;
+        int lMax;
+        try {
+            lMin = Integer.parseInt(pMinToken);
+            lMax = Integer.parseInt(pMaxToken);
+        } catch (NumberFormatException pEx) {
+            return pMaxToken;
+        }
+        if (lMin < 0 || lMax < 0) {
+            return pMinToken + " to " + pMaxToken;
+        }
+        if (lMin < lMax) {
+            return pMinToken + "-" + pMaxToken;
+        }
+        return pMaxToken;
     }
 
     private static String tierLabel(D2GrailEntry.Tier pTier) {
