@@ -136,10 +136,56 @@ public final class D2TxtFile {
         ArrayList outArr = new ArrayList();
         for (int x = 1; x < 8; x++) {
 
-            String propsStatCode = D2TxtFile.PROPS.searchColumns("code", pCode).get("stat" + x);
+            D2TxtFileItemProperties propsRow = D2TxtFile.PROPS.searchColumns("code", pCode);
+            if (propsRow == null) {
+                // pCode itself has no row in properties.txt at all -- not merely a blank "stat1"
+                // on a row that exists (that case is handled below), but the code being wholly
+                // unknown to the loaded tables. This is a real, reachable case, not theoretical:
+                // a save or mod build newer than the ./d2111 tables loaded can reference a
+                // properties.txt code we don't have, and D2Item.addSetProperties (the item-load
+                // path, not just this grail-tooltip path) calls propToStat with no try/catch at
+                // all -- an unguarded NPE here would abort loading the whole item, not just blank
+                // one tooltip line. Degrade the same way the empty-stat1/no-rescue "break" below
+                // does: stop and return whatever props were already resolved (empty on the first
+                // iteration), rather than throwing.
+                break;
+            }
+            String propsStatCode = propsRow.get("stat" + x);
             if (propsStatCode.equals("")) {
-                if (pCode.equals("dmg%") && x == 1) {
+                // A handful of properties.txt codes carry no "stat1" column at all -- their stat is
+                // implied by the "func" column instead, a modding convention the data itself uses
+                // rather than naming the stat directly (func 5/6/7/20, respectively, for the four
+                // rescued below). "dmg%" was the only one of these ever rescued before this; the
+                // other three silently produced zero D2Props -- and therefore no line at all -- for
+                // every item that used them (uniqueitems.txt/setitems.txt/sets.txt reference these
+                // codes ~1056 times total; a real example this fix restores: the unique caduceus
+                // "Wrath of the Seraphim" (*ID 618) has prop2="dmg-max" min=100 max=200, "+100-200
+                // to Maximum Weapon Damage" on the mod's own site, which GoMule showed nothing for
+                // at all). Guarded to x==1 -- exactly like the single dmg% case it replaces -- so an
+                // empty stat2..stat7 (a property that simply has fewer than 7 stats) still ends the
+                // loop normally instead of being mistaken for one of these.
+                //
+                // Verified against every row in ./d2111's properties.txt with an empty stat1: each
+                // of func 5/6/7/20 is used by exactly one such code, so keying on the literal code
+                // (as the single pre-existing dmg% case already did) is exactly as safe as keying on
+                // func would be here, and needs no extra column lookup or int parse.
+                //
+                // "ethereal" (func 23, also stat1-empty) is deliberately NOT rescued: there is no
+                // itemstatcost.txt stat for it at all, searched for and confirmed absent -- ethereal
+                // is a plain item flag, not a stat with a value, so there is nothing to synthesize a
+                // D2Prop from. A found item's real "Ethereal" line comes from D2Item.isEthereal()
+                // (a bitstream flag) via D2ItemRenderer's own dedicated rendering, entirely separate
+                // from this property-list pipeline; a missing entry's synthesized tooltip has no
+                // instance to read that flag from, so it simply has no "Ethereal" line, matching an
+                // item flag having no numeric value to synthesize in the first place.
+                if (x == 1 && pCode.equals("dmg%")) {
                     propsStatCode = "item_maxdamage_percent";
+                } else if (x == 1 && pCode.equals("dmg-min")) {
+                    propsStatCode = "mindamage";
+                } else if (x == 1 && pCode.equals("dmg-max")) {
+                    propsStatCode = "maxdamage";
+                } else if (x == 1 && pCode.equals("indestruct")) {
+                    propsStatCode = "item_indesctructible"; // sic -- itemstatcost.txt's own spelling
                 } else {
                     break;
                 }
@@ -224,7 +270,10 @@ public final class D2TxtFile {
             pVals[2] = 0;
 
             if (propsStatCode.equals("item_addclassskills")) {
-                pVals[0] = Integer.parseInt(D2TxtFile.PROPS.searchColumns("code", pCode).get("val1"));
+                // Reuse propsRow rather than re-querying searchColumns("code", pCode): it is the
+                // same row keyed on the same pCode, already proven non-null by the guard above,
+                // so there is nothing new here that could return null.
+                pVals[0] = Integer.parseInt(propsRow.get("val1"));
             }
 
             outArr.add(new D2Prop(Integer.parseInt(D2TxtFile.ITEM_STAT_COST.searchColumns("Stat", propsStatCode).get("*ID")), pVals, qFlag));

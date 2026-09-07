@@ -488,7 +488,16 @@ public class D2ItemTest {
                 "Sol Rune (#12)\n" +
                 "Required Level: 27\n" +
                 "Version: Resurrected\n" +
-                "Weapons: Armor: Damage Reduced by 7\n" +
+                // gems.txt: Sol Rune's weaponMod1Code is "dmg-min" (min=9, max=9), a
+                // properties.txt code with no "stat1" column at all (the stat is implied by
+                // its "func" column instead -- see D2TxtFile.propToStat's func-implied-stat
+                // rescue). Before that rescue covered "dmg-min", propToStat silently returned
+                // zero props for it, so this rune's real "Weapons: +9 to Minimum Damage" line
+                // was dropped entirely and this fixture pinned the (wrong) collapsed
+                // "Weapons: Armor: ..." text as if Weapons had no properties of its own. This
+                // is the correct, restored text, not a behavior change to chase away.
+                "Weapons: +9 to Minimum Damage\n" +
+                "Armor: Damage Reduced by 7\n" +
                 "Shields: Damage Reduced by 7\n";
         byte[] bytes = decode("10 08 80 04 05 00 D4 92 D4 1E 4F 6A 8C AA 02 BA 1A 10 50 44 98 FF 10 98 90 98 C6 83 A0 84 67 F2 FC 07 10 00 A0 00 35 00 E0 7C B6 01 10 00 A0 00 35 04 E0 7C F6 01 10 00 A0 00 35 08 E0 7C 98 00 10");
         D2Item d2Item = loadD2Item(bytes);
