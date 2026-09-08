@@ -145,11 +145,13 @@ public class D2PropToStatPerLevelTest {
     }
 
     /**
-     * "oskill_hide" (and "hit-skill") carry a skill NAME in "par", not a number -- propToStat's
-     * existing pParam parse already returns early (nothing added) the moment that fails to parse
-     * as an integer, for every property, per-level or not. This must keep degrading to "nothing
-     * added, no exception" rather than the new per-level branch (which only ever looks at pVals[2]
-     * after a successful parse) being reachable with a non-numeric value at all.
+     * "oskill_hide" carries a skill NAME in "par", not a number -- propToStat's generic pParam parse
+     * returns early (nothing added) the moment that fails to parse as an integer, for every
+     * property, per-level or not. This must keep degrading to "nothing added, no exception" rather
+     * than the per-level branch (which only ever looks at pVals[2] after a successful parse) being
+     * reachable with a non-numeric value at all. ("hit-skill" and its five skill-on-event siblings
+     * used to share this fate; they are now resolved by name ahead of the generic parse -- see
+     * D2PropToStatSkillEventTest -- while oskill_hide deliberately is not.)
      */
     @Test
     public void nonNumericParamPropertyIsUnaffected() {

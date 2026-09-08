@@ -128,13 +128,12 @@ public class D2GrailListRendererRangeTest {
      * were a real range). The gate must keep producing the real, single "+65" value, never a range
      * of skill ids.
      * <p>
-     * (hit-skill/charged/death-skill are NOT used for this test even though they share the same
-     * gate: every real row's "par" column for those codes holds a translated SKILL NAME string,
-     * e.g. "Hailstorm", which D2TxtFile.propToStat() itself already fails to parse as an int and
-     * returns no D2Prop for at all -- a separate, pre-existing gap in the table-sourced tooltip
-     * pipeline, confirmed empirically and unrelated to this feature. Those slots simply render
-     * nothing, before or after this change, so they exercise the gate without being able to prove
-     * anything through its OUTPUT the way skill-rand can.)
+     * (hit-skill/charged/death-skill share the same gate but are covered separately -- see
+     * fallenHerosDisgraceNeverInventsADeathSkillRange below and D2PropToStatSkillEventTest. Those
+     * codes' "par" columns hold a SKILL NAME rather than a numeric id, which propToStat used to
+     * reject outright, so at the time this test was written they rendered nothing at all and could
+     * not prove anything through their OUTPUT the way skill-rand can; they render properly now, and
+     * this test stays on skill-rand because uiRangeType 2 is the shape it was written to pin.)
      */
     @Test
     public void ormusRobesSkillRandNeverInventsASkillIdRange() {
@@ -153,15 +152,16 @@ public class D2GrailListRendererRangeTest {
      * "Fallen Hero's Disgrace" (*ID 1213) is the row the parent task's own uiRangeType correction
      * was raised against: prop8 "death-skill" (uiRangeType=7) has min8=100 ("% Chance") and
      * max8=15 ("Skill Level") -- two different quantities, not a range, and min &gt; max to boot.
-     * Empirically, though, this slot already renders NOTHING at all, before or after this change:
-     * its par8 is the skill NAME "Hailstorm" (not a numeric id), which D2TxtFile.propToStat()
-     * itself fails to parse as an int and silently returns no D2Prop for -- a separate,
-     * pre-existing gap, not something this feature introduces or is positioned to fix. So the real,
-     * checkable assertion here is negative-space: neither "100-15" nor "15-100" (nor the " to "
-     * form of either) may appear as an invented death-skill value, while this same row's two
-     * GENUINE ranges (prop6 "red-dmg" 10-15, prop7 "red-mag" 10-15, both uiRangeType-blank) must
-     * still render correctly -- proving the gate does not accidentally suppress a real range on a
-     * row that also happens to contain one broken slot.
+     * When this test was written the slot rendered NOTHING at all -- its par8 is the skill NAME
+     * "Hailstorm" (not a numeric id), which D2TxtFile.propToStat() failed to parse as an int and
+     * silently returned no D2Prop for. That separate gap is now fixed (see
+     * D2PropToStatSkillEventTest), so the row's real line is asserted here too: the chance (100,
+     * the min column) and the skill level (15, the max column) must stay in their own slots. The
+     * negative-space assertions remain the point of this test, though: neither "100-15" nor
+     * "15-100" (nor the " to " form of either) may ever appear as an invented death-skill range,
+     * while this same row's two GENUINE ranges (prop6 "red-dmg" 10-15, prop7 "red-mag" 10-15, both
+     * uiRangeType-blank) must still render correctly -- proving the gate neither merges the
+     * skill-event pair nor suppresses a real range on the same row.
      */
     @Test
     public void fallenHerosDisgraceNeverInventsADeathSkillRange() {
@@ -170,6 +170,7 @@ public class D2GrailListRendererRangeTest {
         String lTooltip = D2GrailListRenderer.tooltipFor(rowOf(lFallenHero), null);
 
         assertNotNull(lTooltip);
+        assertTrue(lTooltip.contains("100% Chance to cast level 15 Hailstorm when you Die"), lTooltip);
         assertFalse(lTooltip.contains("100-15"), lTooltip);
         assertFalse(lTooltip.contains("15-100"), lTooltip);
         assertFalse(lTooltip.contains("100 to 15"), lTooltip);

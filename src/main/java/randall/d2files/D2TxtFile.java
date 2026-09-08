@@ -191,6 +191,44 @@ public final class D2TxtFile {
                 }
             }
 
+            // properties.txt's "cast a skill on some event" family (uiRangeType 7 -- "att-skill",
+            // "hit-skill", "gethit-skill", "kill-skill", "death-skill", "levelup-skill") plus its
+            // charge-granting sibling "charged" (uiRangeType 6) are the two shapes whose .txt
+            // columns are NOT the plain (min, max, par) triple the generic code below assumes:
+            //
+            //   code        par      min                                   max
+            //   *-skill     Skill    % Chance (If 0, then default to 5)    Skill Level
+            //   charged     Skill    # of Max Charges                      Skill Level
+            //
+            // Two separate things went wrong on these before, and either one alone silenced the
+            // line completely:
+            //   - "par" holds a skill NAME in every uniqueitems.txt/setitems.txt/sets.txt/runes.txt
+            //     row that uses one of these codes -- e.g. Schaefer's Hammer's prop1 "hit-skill"
+            //     par="Static Field" -- not a number, so the pParam parse below threw
+            //     NumberFormatException and the whole call returned an EMPTY list: no D2Prop, no
+            //     tooltip line at all. (Only magicsuffix.txt spells these params as raw numeric
+            //     skill ids, so both spellings are accepted -- see resolveSkillId.)
+            //   - even given a numeric param, the generic path zeroes pVals[2] and never fills
+            //     pVals[1] at all, while D2Prop's own renderers for these stats (descfunc 15 and
+            //     24) read the same [skill level, skill id, chance] / [skill level, skill id,
+            //     charges, max charges] layout that D2PropCollection.readProp() builds from a real
+            //     item's bitstream (its dedicated 195/196/197/198/199/201 and 204 branches). So the
+            //     pieces have to be placed by hand, in that order, not left to the generic
+            //     assignment below.
+            //
+            // Confirmed against the mod's own item page for Schaefer's Hammer, whose grail tooltip
+            // was missing exactly one line versus the site -- "10% Chance to cast level 10 Static
+            // Field on striking" (prop1 "hit-skill", par="Static Field", min=10, max=10) -- which
+            // this restores, along with the same line on every other unique/set/runeword row using
+            // one of these seven codes.
+            if (x == 1 && isSkillEventStat(propsStatCode)) {
+                D2Prop lSkillProp = skillEventProp(propsStatCode, pMin, pMax, pParam, qFlag);
+                if (lSkillProp != null) {
+                    outArr.add(lSkillProp);
+                }
+                break;
+            }
+
             int[] pVals = {0, 0, 0};
 
             if (!pMin.equals("")) {
@@ -281,6 +319,99 @@ public final class D2TxtFile {
         }
         return outArr;
 
+    }
+
+    /**
+     * True for the itemstatcost.txt stats behind properties.txt's six skill-on-event codes
+     * ("att-skill"/"hit-skill"/"gethit-skill"/"kill-skill"/"death-skill"/"levelup-skill" ->
+     * item_skillonattack/onhit/ongethit/onkill/ondeath/onlevelup, stat ids 195/198/201/196/197/199)
+     * and its charge-granting "charged" code (item_charged_skill, 204) -- exactly the stat ids
+     * D2PropCollection.readProp() already special-cases when reading the very same properties off a
+     * real item's bitstream, and the only stats whose (min, max, par) columns propToStat has to
+     * place by hand rather than generically. Keyed on the STAT name rather than the properties.txt
+     * code so a mod adding a seventh code on top of one of these stats is covered automatically.
+     */
+    private static boolean isSkillEventStat(String pStatCode) {
+        return "item_skillonattack".equals(pStatCode)
+                || "item_skillonhit".equals(pStatCode)
+                || "item_skillongethit".equals(pStatCode)
+                || "item_skillonkill".equals(pStatCode)
+                || "item_skillondeath".equals(pStatCode)
+                || "item_skillonlevelup".equals(pStatCode)
+                || "item_charged_skill".equals(pStatCode);
+    }
+
+    /**
+     * Builds the single D2Prop for one skill-on-event / charged property slot, in the pVals layout
+     * D2Prop.generateDisplay()'s descfunc 15 and 24 branches expect -- the same layout
+     * D2PropCollection.readProp() produces for a found item, so a table-sourced tooltip line and a
+     * real item's line render through identical code:
+     * <ul>
+     *   <li>the six "*-skill" stats (descfunc 15): {skill level, skill id, % chance}. The level is
+     *   the "max" column and the chance is the "min" column -- the two are NOT the ends of one
+     *   range (properties.txt's own uiRangeType 7 says so), and a 0 or blank chance means 5, per
+     *   that same row's "*Min" note "% Chance (If 0, then default to 5)".</li>
+     *   <li>"charged" (descfunc 24): {skill level, skill id, charges, max charges}. Its "min"
+     *   column is the max-charge count, and an item nobody has found yet is shown at full charges,
+     *   so that one number fills both slots -- e.g. Spellsteel's "Level 10 Holy Bolt (100/100
+     *   Charges)".</li>
+     * </ul>
+     * Returns null -- dropping just this one line, never throwing and never producing a half-built
+     * prop -- when the skill cannot be resolved or a present column is non-numeric, matching how
+     * the rest of propToStat degrades on data it cannot use.
+     */
+    private static D2Prop skillEventProp(String pStatCode, String pMin, String pMax, String pParam, int qFlag) {
+        int lSkillId = resolveSkillId(pParam);
+        if (lSkillId < 0) {
+            return null;
+        }
+        int lMin;
+        int lSkillLevel;
+        try {
+            lMin = (pMin == null || pMin.isEmpty()) ? 0 : Integer.parseInt(pMin);
+            lSkillLevel = (pMax == null || pMax.isEmpty()) ? 0 : Integer.parseInt(pMax);
+        } catch (NumberFormatException pEx) {
+            return null;
+        }
+        int lStatId = Integer.parseInt(ITEM_STAT_COST.searchColumns("Stat", pStatCode).get("*ID"));
+        if ("item_charged_skill".equals(pStatCode)) {
+            return new D2Prop(lStatId, new int[]{lSkillLevel, lSkillId, lMin, lMin}, qFlag);
+        }
+        return new D2Prop(lStatId, new int[]{lSkillLevel, lSkillId, lMin == 0 ? 5 : lMin}, qFlag);
+    }
+
+    /**
+     * Resolves a property slot's "par" column to a skills.txt skill id. The tables spell it two
+     * ways, and both are real: uniqueitems.txt/setitems.txt/sets.txt/runes.txt use the skill's NAME
+     * (skills.txt's own "skill" column -- "Static Field", "Blessed Hammer", and mod-added ones like
+     * "Storm Pulse" or "Winters Pulse"), while magicsuffix.txt uses the raw numeric id. Anything
+     * else -- blank, or a name with no skills.txt row -- returns -1 ("no such skill"), which drops
+     * only that one property line.
+     * <p>
+     * The name lookup returns skills.txt's own "*Id" column, which is what D2Prop's renderers feed
+     * straight back to SKILLS.getRow(): safe because skills.txt is indexed BY that id -- verified
+     * row-by-row against ./d2111's skills.txt, where row N is *Id N throughout (it carries no
+     * "Expansion" separator row of the kind that shifts uniqueitems.txt/setitems.txt).
+     */
+    private static int resolveSkillId(String pParam) {
+        if (pParam == null || pParam.isEmpty()) {
+            return -1;
+        }
+        try {
+            return Integer.parseInt(pParam);
+        } catch (NumberFormatException pNotANumericId) {
+            // Falls through to the name lookup below -- the spelling used by every table except
+            // magicsuffix.txt.
+        }
+        D2TxtFileItemProperties lSkillRow = SKILLS.searchColumns("skill", pParam);
+        if (lSkillRow == null) {
+            return -1;
+        }
+        try {
+            return Integer.parseInt(lSkillRow.get("*Id"));
+        } catch (NumberFormatException pEx) {
+            return -1;
+        }
     }
 
     public static D2TxtFileItemProperties search(String pCode) {

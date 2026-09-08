@@ -290,6 +290,37 @@ public class D2GrailListRendererTest {
         assertFalse(lTooltip.contains("Required Strength"), lTooltip);
     }
 
+    /**
+     * The reported bug, end to end: "Schaefer's Hammer" (uniqueitems.txt *ID 257, code 7wh) showed
+     * every line from the mod's own item page EXCEPT its first one, "10% Chance to cast level 10
+     * Static Field on striking" -- its prop1 "hit-skill", par="Static Field", min=10 ("% Chance"),
+     * max=10 ("Skill Level"). D2TxtFile.propToStat() dropped the whole property because "par" is a
+     * skill NAME rather than a number (see D2PropToStatSkillEventTest for that fix's own unit
+     * coverage), so nothing reached this tooltip at all.
+     * <p>
+     * Asserted here rather than only at the propToStat level because the missing-item tooltip is
+     * where the bug was actually seen, and because the line has to survive this class's whole
+     * min/max two-pass range machinery: "hit-skill" is uiRangeType 7, so isRangeEligible() must
+     * keep feeding BOTH passes the row's original (10, 10) columns and the two fragments must merge
+     * back into one unchanged line -- never an invented "10-10" range across the chance and the
+     * level, which are two different quantities.
+     */
+    @Test
+    public void schaefersHammerShowsItsChanceToCastLine() {
+        D2TxtFile.constructTxtFiles("./d2111");
+        D2GrailEntry lSchaefers = findByDisplayName("Schaefer's Hammer");
+        String lTooltip = D2GrailListRenderer.tooltipFor(rowOf(lSchaefers, null), null);
+
+        assertNotNull(lTooltip);
+        assertTrue(lTooltip.contains("10% Chance to cast level 10 Static Field on striking"),
+                "prop1 hit-skill must render the mod site's own line: " + lTooltip);
+        assertFalse(lTooltip.contains("10-10"), "chance and skill level are not a range: " + lTooltip);
+        // The rest of the item must be untouched by the new property -- these are the lines the
+        // tooltip already showed correctly before the fix.
+        assertTrue(lTooltip.contains("+250-300% Enhanced Damage"), lTooltip);
+        assertTrue(lTooltip.contains("Adds 50 - 500 Lightning Damage"), lTooltip);
+    }
+
     private static D2GrailModel.Row rowOf(D2GrailEntry pEntry, Object pUnusedFinding) {
         // D2GrailModel.Row's constructor is package-private (gomule.grail); build one the same
         // way D2ViewGrail does, through a tiny one-entry model instead of reflection.

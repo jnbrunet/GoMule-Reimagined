@@ -484,20 +484,28 @@ public class D2Prop {
                                         D2TxtFile.MONSTATS.getRow(pVals[0]).get("NameStr"));
 
             case (24):
-
-                oString = oString.replaceFirst("%d", Integer.toString(pVals[2]));
-                oString = oString.replaceAll("%d", Integer.toString(pVals[3]));
-                return "Level " + pVals[0] + " "
-                        + D2Files.getInstance()
-                                .getTranslations()
-                                .getTranslation(D2TxtFile.SKILL_DESC
-                                        .searchColumns(
-                                                "skilldesc",
-                                                D2TxtFile.SKILLS
-                                                        .getRow(pVals[1])
-                                                        .get("skilldesc"))
-                                        .get("str name"))
-                        + " " + oString;
+                // item_charged_skill, whose descstrpos "ModStre10d" is the four-placeholder
+                // template "Level %d %s (%d/%d Charges)" -- level, skill name, charges left, max
+                // charges, in that order. pVals is [skill level, skill id, charges, max charges],
+                // the layout D2PropCollection.readProp() builds for stat 204 off a real item's
+                // bitstream (and, since the skill-event fix, the one D2TxtFile.propToStat() builds
+                // for a table-sourced "charged" row too).
+                //
+                // The previous code filled the template's FIRST %d with the charge count and then
+                // prefixed its own "Level <n> <skill> " in front of the still-templated remainder,
+                // producing doubled, half-substituted garbage on every charged item -- verified in
+                // the running app against the real unique "Spellsteel", which rendered
+                // "Level 10 Holy Bolt Level 100 %s (100/100 Charges)" instead of the correct
+                // "Level 10 Holy Bolt (100/100 Charges)". Substituting the four placeholders in
+                // the template's own order fixes it without hard-coding any English: the word
+                // "Level" and the parenthesised charge pair both come from the translation now,
+                // exactly as case 15 already does for the chance-to-cast family.
+                String lChargedSkill = skillDisplayName(pVals[1]);
+                return oString
+                        .replaceFirst("%d", Integer.toString(pVals[0]))
+                        .replaceFirst("%s", java.util.regex.Matcher.quoteReplacement(lChargedSkill))
+                        .replaceFirst("%d", Integer.toString(pVals[2]))
+                        .replaceFirst("%d", Integer.toString(pVals[3]));
 
             case (27):
                 return "+" + pVals[1] + " to "
@@ -645,6 +653,26 @@ public class D2Prop {
                 }
         }
         opApplied = true;
+    }
+
+    /**
+     * A skill id's player-facing display name, via skills.txt's "skilldesc" -> skilldesc.txt's
+     * "str name" -> the translation table -- the same three-step lookup case 15 (the
+     * chance-to-cast family) already performs inline, factored out so case 24 can share it rather
+     * than repeat it. Degrades to "Unknown" exactly as case 15 does when the skill row carries no
+     * skilldesc at all, or when the resulting string has no translation, instead of throwing and
+     * taking the whole item's tooltip down with it.
+     */
+    private static String skillDisplayName(int pSkillId) {
+        String lSkillDesc = D2TxtFile.SKILLS.getRow(pSkillId).get("skilldesc");
+        String lName = null;
+        if (lSkillDesc != null && !"".equals(lSkillDesc)) {
+            D2TxtFileItemProperties lDescRow = D2TxtFile.SKILL_DESC.searchColumns("skilldesc", lSkillDesc);
+            if (lDescRow != null) {
+                lName = D2Files.getInstance().getTranslations().getTranslation(lDescRow.get("str name"));
+            }
+        }
+        return lName == null ? "Unknown" : lName;
     }
 
     public String getSkillTree(int lSkillNr) {
