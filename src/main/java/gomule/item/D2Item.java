@@ -476,7 +476,7 @@ public class D2Item implements Comparable, D2ItemInterface {
             // structure regardless of sockets, all decoding only at this amount. Kept narrow
             // (socketed + flag-29 + not a Facet, which has its own handling).
             if (check_flag(29) && !isElementalFacet() && usesPostV99ItemFormat()) {
-                pFile.skipBits(hasElementalSkillProperty() ? 56 : 52);
+                pFile.skipBits(flag29BlobLength(pFile));
             }
             pFile.set_pos(pFile.getNextByteBoundaryInBits());
             for (int i = 0; i < iSocketNrFilled; i++) {
@@ -761,41 +761,50 @@ public class D2Item implements Comparable, D2ItemInterface {
         // same bits appear BEFORE its sockets instead and are skipped up in the socket loop (see the
         // "Hand of Blessed Light" comment there), so counting them again here would double-skip.
         if (iSocketNrFilled == 0 && check_flag(29) && !isElementalFacet() && usesPostV99ItemFormat()) {
-            // The base flag-29 skill blob is 52 bits, or 56 when the item grants an elemental-skill
-            // bonus (see hasElementalSkillProperty()). A flag-29 item whose granted skill is a
-            // "chance to cast ... on attack" (item_skillonattack, stat 195 -- the "att-skill"
-            // property) carries a further 64 bits on top of that. This was found and confirmed
-            // against a real Paladin character's unique ring "Opalvein" (uid 415, "15% Chance to cast
-            // level 2 Flame Wave on attack"): its body read exactly 64 bits short, desyncing the very
-            // next item, and adding these 64 bits was the only offset that let the rest of the file
-            // decode -- the next item coming out as a real, recognizable unique ring ("Raven Frost")
-            // and the whole 125-item character then reaching a clean, complete load, cross-checked
-            // against an independent brute-force chain-scan of the raw bytes that put the true next
-            // boundary exactly where +64 lands. Keyed on the stat (item_skillonattack), not the item
-            // code, deliberately -- the point is the "cast on attack" grant, not the ring. Crucially
-            // this is NOT "any chance-to-cast": the same file carried a "Wisp Projector" and a
-            // "Carrion Wind", both also flag-29 rings with a chance-to-cast, but on *striking*
-            // (item_skillonhit, stat 198) / *when struck* (item_skillongethit, 201) -- and both
-            // decoded correctly at the standard 52 with NO extra bits, so the extra length belongs
-            // specifically to the on-attack variant. What these 64 bits hold is still unknown; this
-            // stays a length heuristic, not a decode of the blob. Left on the non-socketed path only,
-            // matching the base blob just above (a socketed cast-on-attack item, if one can even
-            // exist -- rings, the only confirmed carriers, can't be socketed -- would carry its blob
-            // before its sockets, like the other flag-29 items; no such sample has turned up).
-            pFile.skipBits((hasElementalSkillProperty() ? 56 : 52) + (hasSkillOnAttackProperty() ? 64 : 0));
+            pFile.skipBits(flag29BlobLength(pFile));
         }
     }
 
-    // True when this item's own property list carries an item_skillonattack stat (id 195) -- the
-    // "chance to cast ... on attack" grant. Read straight off the parsed stats (iProps) rather than
-    // the unique/set recipe so it also catches the same grant arriving as a magic/rare affix, and so
-    // it reflects what is actually stored in this item. See the flag-29 blob's caller for why the
-    // presence of this stat lengthens that blob by 64 bits.
-    private boolean hasSkillOnAttackProperty() {
-        for (Object o : iProps) {
-            if (((D2Prop) o).getPNum() == 195) return true;
-        }
-        return false;
+    // Bit offset, counted from the first bit of the flag-29 trailing blob, of the one bit that says
+    // whether a second 64-bit record follows the blob's core. See flag29BlobLength() for how it was
+    // found and what the surrounding bits look like.
+    private static final int FLAG29_EXTRA_RECORD_BIT = 47;
+
+    /**
+     * How many bits the flag-29 trailing blob occupies, starting at pFile's current position (which
+     * this leaves exactly where it found it -- it only peeks).
+     * <p>
+     * The blob's core is 52 bits, or 56 when the item grants an elemental-skill bonus (see
+     * hasElementalSkillProperty()). Some items carry a further 64 bits on top of that, and the blob
+     * says so itself: dumping the raw bits of every flag-29 item across the real fixture characters
+     * shows a fixed shape -- 32 bits of per-item value, then the constant byte 11000111, then seven
+     * zero bits, then ONE bit that is 0 on every item whose blob is just the core and 1 on every
+     * item that carries the extra 64 bits, then four more zero bits. Confirmed both ways over 15
+     * real items: 0 on Sling (x5), Baal's Cryptic Amulet, Nature's Peace, Wisp Projector, The Stone
+     * of Jordan, Constricting Ring, Raven Frost, Gravepalm, Stormlash and every socketed Hand of
+     * Blessed Light -- all of which decode at the core length -- and 1 on exactly the two items that
+     * need the extra 64 bits, a unique ring "Opalvein" (pally8.d2s) and a unique Spired Helm "Veil
+     * of Steel" (a mercenary's helm in mouchton.d2s), both of whose extra 64 bits are all zeroes.
+     * <p>
+     * This replaces the earlier rule, which keyed the extra 64 bits on the item carrying an
+     * item_skillonattack stat (195, the "cast on attack" grant) -- a heuristic drawn from Opalvein,
+     * the only sample available at the time, which happened to have both. Veil of Steel disproved
+     * it: it grants no skill at all (its whole property list is str/vit/ac%/ac/four resists/max
+     * durability/light radius, matching its uniqueitems.txt row exactly) yet needs the same 64 bits,
+     * so a mercenary's helm read 64 bits short and every merc item after it failed. Reading the
+     * blob's own bit covers both, needs no guess about which stats lengthen it, and keeps Opalvein
+     * decoding exactly as before (its bit is set).
+     * <p>
+     * What the blob holds is still unknown -- this is a length rule, not a decode. Reading past the
+     * end of the file is safe: D2BitReader.read() pads with zeroes there, which reads as "core
+     * length only", the conservative answer.
+     */
+    private int flag29BlobLength(D2BitReader pFile) {
+        int lBlobStart = pFile.get_pos();
+        pFile.set_pos(lBlobStart + FLAG29_EXTRA_RECORD_BIT);
+        boolean lHasExtraRecord = pFile.read(1) == 1;
+        pFile.set_pos(lBlobStart);
+        return (hasElementalSkillProperty() ? 56 : 52) + (lHasExtraRecord ? 64 : 0);
     }
 
     private void readExtend1(D2BitReader pFile) throws Exception {

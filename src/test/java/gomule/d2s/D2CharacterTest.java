@@ -746,4 +746,60 @@ public class D2CharacterTest {
         assertEquals(1, riverStix.getPropCollection().stream()
                 .filter(o -> ((gomule.item.D2Prop) o).getPNum() == 43).count(), "res-cold");
     }
+
+    // A real Reimagined paladin ("mouchton") whose mercenary wears the unique Spired Helm "Veil of
+    // Steel". Veil of Steel has flag 29 set, so it carries the flag-29 trailing blob -- and it is the
+    // sample that disproved the old rule for that blob's length. The old rule added 64 bits on top of
+    // the 52-bit core only when the item carried an item_skillonattack stat (195, "cast on attack"),
+    // a heuristic drawn from the one sample available at the time (pally8.d2s's ring "Opalvein",
+    // which has both). Veil of Steel grants no skill whatsoever -- its whole property list is
+    // str/vit/ac%/ac/four resists/max durability/light radius, exactly its uniqueitems.txt row -- yet
+    // needs the same 64 bits, so under the old rule it read 64 bits short and the merc list stopped
+    // dead at item 7 of 9, the first failure being "Hannibal's Shattered Plate" immediately after it.
+    // An independent chain-scan of the raw bytes put the true next boundary at byte 3737 while the
+    // parser ended Veil of Steel at 3729 -- exactly the 8 missing bytes.
+    //
+    // The blob turns out to declare its own length (see D2Item.flag29BlobLength): one bit at offset
+    // 47 is set on precisely the items that carry the extra 64 bits. This file pins the case the
+    // stat-keyed rule could not reach.
+    @Test
+    public void reimaginedPaladinWithSkilllessFlag29MercHelmLoadsFully() throws Exception {
+        D2TxtFile.constructTxtFiles("./d2111");
+        D2Character d2Character = new D2Character(
+                new File(Resources.getResource("charFiles/pally10.d2s").toURI()).getAbsolutePath());
+
+        assertEquals("mouchton", d2Character.getCharName());
+        assertEquals("Paladin", d2Character.getCharClass());
+        assertEquals(90, d2Character.getCharLevel());
+        assertFalse(d2Character.isItemsIncomplete(), d2Character.getItemsIncompleteReason());
+
+        // 73 character items + all 9 mercenary items; the merc list used to stop after 6.
+        assertEquals(82, d2Character.getItemList().size());
+        assertEquals(9, d2Character.getMercItemNr());
+
+        assertEquals("Veil of Steel", d2Character.getMercItem(5).getItemName());
+        // The three items after it are the ones the old rule lost -- their decoding into real,
+        // recognizable uniques (not merely "nothing threw") is what proves the new blob length.
+        assertEquals("Hannibal's Shattered Plate", d2Character.getMercItem(6).getItemName());
+        assertEquals("Andariel's Hooves", d2Character.getMercItem(7).getItemName());
+        assertEquals("Sin and Greed", d2Character.getMercItem(8).getItemName());
+
+        // The point of the fixture: this flag-29 item grants no skill at all, so none of the
+        // skill-on-event stats the old rule keyed on (195 on-attack, 198 on-striking, 201 when-struck)
+        // is present, yet it still carries the longer blob.
+        D2Item veilOfSteel = d2Character.getMercItem(5);
+        assertTrue(veilOfSteel.getPropCollection().stream()
+                        .noneMatch(o -> {
+                            int lStat = ((gomule.item.D2Prop) o).getPNum();
+                            return lStat == 195 || lStat == 198 || lStat == 201;
+                        }),
+                "Veil of Steel carries no chance-to-cast stat at all");
+        // Its own seven uniqueitems.txt properties still decoded (str, vitality, enhanced defense).
+        assertTrue(veilOfSteel.getPropCollection().stream()
+                .anyMatch(o -> ((gomule.item.D2Prop) o).getPNum() == 0), "strength");
+        assertTrue(veilOfSteel.getPropCollection().stream()
+                .anyMatch(o -> ((gomule.item.D2Prop) o).getPNum() == 3), "vitality");
+        assertTrue(veilOfSteel.getPropCollection().stream()
+                .anyMatch(o -> ((gomule.item.D2Prop) o).getPNum() == 16), "enhanced defense");
+    }
 }
