@@ -6,6 +6,7 @@ import gomule.grail.D2GrailFinding;
 import gomule.grail.D2GrailFirstSeenStore;
 import gomule.grail.D2GrailKey;
 import gomule.grail.D2GrailModel;
+import gomule.grail.D2GrailRequiredLevel;
 import gomule.grail.D2GrailRunewords;
 import gomule.item.D2Item;
 import gomule.item.D2ItemRenderer;
@@ -108,6 +109,30 @@ public class D2GrailListRenderer extends JLabel implements ListCellRenderer<Obje
         setOpaque(true);
         setIconTextGap(8);
         setVerticalAlignment(TOP);
+    }
+
+    /**
+     * Everything one grail entry says about itself, as the search box's D2GrailModel.
+     * SearchTextProvider -- the missing-entry tooltip, i.e. the item's whole definition straight
+     * from the tables: its base statistics, every property line, and a set piece's set bonuses.
+     * That is what makes "increased attack speed" or "faster cast rate" find items rather than only
+     * the two that happen to be NAMED that.
+     * <p>
+     * Deliberately the table-sourced description even for an entry that HAS been found, so a search
+     * behaves the same before and after the player owns the item: the grail is a list of
+     * definitions, and matching one particular rolled copy's numbers instead would make the same
+     * query return different rows on two different machines. HTML and all -- the model strips the
+     * tags, since how the text is folded for matching is its concern, not this class's.
+     * <p>
+     * Returns "" rather than throwing for an entry whose properties will not render: one bad row
+     * must cost that row its affix search, never the whole search box.
+     */
+    public static String searchTextFor(D2GrailEntry pEntry) {
+        try {
+            return missingTooltip(pEntry);
+        } catch (RuntimeException pEx) {
+            return "";
+        }
     }
 
     /**
@@ -287,19 +312,35 @@ public class D2GrailListRenderer extends JLabel implements ListCellRenderer<Obje
     }
 
     /**
-     * "BaseItemName - Tier" (plan section 3.1, e.g. "Shako - Elite"), tier omitted for a NORMAL or
-     * tierless (runeword) entry -- matching the sketch, which only ever shows a tier suffix for
-     * Exceptional/Elite bases.
+     * "BaseItemName - Tier - Lvl N" (plan section 3.1, e.g. "Shako - Elite"), tier omitted for a
+     * NORMAL or tierless entry -- matching the sketch, which only ever shows a tier suffix for
+     * Exceptional/Elite bases -- and the level omitted for the handful of entries whose tables
+     * state none.
+     * <p>
+     * The level is here because the list is ORDERED by it (D2GrailModel's ROW_ORDER): an ordering
+     * whose key is invisible reads as no ordering at all. Runewords need no such line -- their rows
+     * draw the whole description, "Required Level: 35" included.
      */
     private static String subtitle(D2GrailEntry pEntry) {
         String lBaseName = nullToEmpty(pEntry.getBaseItemName());
-        if (pEntry.getTier() == D2GrailEntry.Tier.EXCEPTIONAL) {
-            return lBaseName.isEmpty() ? "Exceptional" : lBaseName + " - Exceptional";
+        StringBuilder lOut = new StringBuilder(lBaseName);
+        String lTier = pEntry.getTier() == D2GrailEntry.Tier.EXCEPTIONAL ? "Exceptional"
+                : pEntry.getTier() == D2GrailEntry.Tier.ELITE ? "Elite" : "";
+        if (!lTier.isEmpty()) {
+            appendSubtitlePart(lOut, lTier);
         }
-        if (pEntry.getTier() == D2GrailEntry.Tier.ELITE) {
-            return lBaseName.isEmpty() ? "Elite" : lBaseName + " - Elite";
+        Integer lLevel = D2GrailRequiredLevel.of(pEntry);
+        if (lLevel != null) {
+            appendSubtitlePart(lOut, "Lvl " + lLevel);
         }
-        return lBaseName;
+        return lOut.toString();
+    }
+
+    private static void appendSubtitlePart(StringBuilder pInto, String pPart) {
+        if (pInto.length() > 0) {
+            pInto.append(" - ");
+        }
+        pInto.append(pPart);
     }
 
     /**
@@ -878,7 +919,7 @@ public class D2GrailListRenderer extends JLabel implements ListCellRenderer<Obje
             // Ditto for durability.
         }
         try {
-            Integer lReqLevel = requiredLevel(pEntry, lBaseRow);
+            Integer lReqLevel = D2GrailRequiredLevel.of(pEntry);
             if (lReqLevel != null) {
                 // D2Item.applyItemMods()'s own precedence: iReqLvl is first set from the unique/set
                 // row (D2Item.readExtend, mirrored here by requiredLevel() itself), THEN
@@ -1254,41 +1295,6 @@ public class D2GrailListRenderer extends JLabel implements ListCellRenderer<Obje
             int lHigh = applyPercentPlusFlat(lDurability, pMaxMods.iDurTriple[1], pMaxMods.iDurTriple[0]);
             pHtml.append("Durability: ").append(formatModifiedValue(lLow, lHigh)).append("<br>&#10;");
         }
-    }
-
-    /**
-     * Required Level is NOT simply the base row's own "levelreq" -- D2Item.java raises it from the
-     * unique/set row at parse time (readExtend, cases 7 and 5 respectively), and a missing entry's
-     * tooltip must mirror that precedence or it understates what the item actually requires:
-     * <ul>
-     *   <li>Unique: the unique's own "lvl req" column always wins over the base's "levelreq" when
-     *   it parses to a real requirement (D2Item.java's own check, "lUnique.get(code).equals(
-     *   item_type)", is trivially true here -- pEntry's base code IS that unique row's own "code"
-     *   column, by construction).</li>
-     *   <li>Set item: the set item's own "lvl req" wins over the base's "levelreq" only when it is
-     *   HIGHER (D2Item.java: "lSetReq != -1 && lSetReq > iReqLvl") -- a set piece is never required
-     *   at a LOWER level than its own base item would otherwise demand.</li>
-     * </ul>
-     */
-    private static Integer requiredLevel(D2GrailEntry pEntry, D2TxtFileItemProperties pBaseRow) {
-        Integer lBaseLevel = getReq(pBaseRow.get("levelreq"));
-        D2TxtFileItemProperties lSourceRow = pEntry.getSourceRow();
-        if (lSourceRow == null) {
-            return lBaseLevel;
-        }
-
-        if (pEntry.getKey().getType() == D2GrailKey.Type.UNIQUE) {
-            Integer lUniqueLevel = getReq(lSourceRow.get("lvl req"));
-            return lUniqueLevel != null ? lUniqueLevel : lBaseLevel;
-        }
-        if (pEntry.getKey().getType() == D2GrailKey.Type.SET) {
-            Integer lSetLevel = getReq(lSourceRow.get("lvl req"));
-            if (lSetLevel != null && (lBaseLevel == null || lSetLevel > lBaseLevel)) {
-                return lSetLevel;
-            }
-            return lBaseLevel;
-        }
-        return lBaseLevel;
     }
 
     /**

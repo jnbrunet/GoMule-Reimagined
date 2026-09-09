@@ -138,6 +138,9 @@ public class D2ViewGrail extends JInternalFrame implements D2ItemContainer, D2It
         // the look-and-feel setting -- plan section 4.2) before the first render, so the window
         // never flashes the default scope before switching to the remembered one.
         iModel.setIncludeNonChronicle(iFileManager.isGrailIncludeNonChronicle());
+        // Search matches an item's properties as well as its name -- see
+        // D2GrailModel.SearchTextProvider for why the model is handed this rather than computing it.
+        iModel.setSearchTextProvider(D2GrailListRenderer::searchTextFor);
 
         // D2FileManager.getProject() can be null (a failed checkProjects() -- see its catch
         // block); "First seen" tracking degrades to "not available" rather than this window

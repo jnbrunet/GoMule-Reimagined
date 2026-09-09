@@ -391,6 +391,63 @@ public class D2GrailModelTest {
         assertTrue(lRows.get(0).isFound());
     }
 
+    /**
+     * The search box matches an entry's properties as well as its name, through an injected
+     * D2GrailModel.SearchTextProvider (the window supplies the list renderer's real, whole-tooltip
+     * one; this pins the mechanism with a two-line stub instead, so the model stays testable
+     * without the gui package). Three things at once: the provider IS consulted, its text is
+     * stripped of HTML before matching, and an entry it returns nothing for is simply not matched
+     * rather than throwing.
+     */
+    @Test
+    public void searchAlsoMatchesTheTextTheProviderSupplies() {
+        D2GrailEntry lWithAffix = setPiece("Test Set", "Piece A", 92001, D2GrailEntry.Tier.NORMAL);
+        D2GrailEntry lWithout = setPiece("Test Set", "Piece B", 92002, D2GrailEntry.Tier.NORMAL);
+        D2GrailModel lModel = new D2GrailModel(Arrays.asList(lWithAffix, lWithout));
+        lModel.setTab(D2GrailKey.Type.SET);
+        lModel.setSearchTextProvider(pEntry -> lWithAffix == pEntry
+                ? "<html><font color='#4850b8'>+20% Increased Attack Speed</font></html>"
+                : null);
+
+        lModel.setSearchText("increased attack speed");
+        assertEquals(1, lModel.getRows().size());
+        assertEquals("Piece A", lModel.getRows().get(0).getEntry().getDisplayName());
+
+        // Tags are stripped, so a query may not match across one: "font" appears only inside markup.
+        lModel.setSearchText("font");
+        assertTrue(lModel.getRows().isEmpty(), "HTML markup is not searchable text");
+
+        // And with no provider at all, search is name-only exactly as it always was.
+        D2GrailModel lNameOnly = new D2GrailModel(Arrays.asList(lWithAffix, lWithout));
+        lNameOnly.setTab(D2GrailKey.Type.SET);
+        lNameOnly.setSearchText("increased attack speed");
+        assertTrue(lNameOnly.getRows().isEmpty());
+        lNameOnly.setSearchText("Piece A");
+        assertEquals(1, lNameOnly.getRows().size());
+    }
+
+    /**
+     * A provider that blows up on one entry costs that entry its affix search, never the whole
+     * search box -- the same "degrade to one missing line" stance the tooltip code takes.
+     */
+    @Test
+    public void aProviderThatThrowsOnlyCostsThatEntryItsAffixSearch() {
+        D2GrailEntry lBroken = setPiece("Test Set", "Piece A", 92003, D2GrailEntry.Tier.NORMAL);
+        D2GrailEntry lFine = setPiece("Test Set", "Piece B", 92004, D2GrailEntry.Tier.NORMAL);
+        D2GrailModel lModel = new D2GrailModel(Arrays.asList(lBroken, lFine));
+        lModel.setTab(D2GrailKey.Type.SET);
+        lModel.setSearchTextProvider(pEntry -> {
+            if (lBroken == pEntry) {
+                throw new IllegalStateException("no properties for you");
+            }
+            return "+20% Increased Attack Speed";
+        });
+
+        lModel.setSearchText("increased attack speed");
+        assertEquals(1, lModel.getRows().size(), "the healthy entry still matches");
+        assertEquals("Piece B", lModel.getRows().get(0).getEntry().getDisplayName());
+    }
+
     private static D2GrailEntry setPiece(String pSetName, String pDisplayName, int pId, D2GrailEntry.Tier pTier) {
         return new D2GrailEntry(
                 D2GrailKey.set(pId), pDisplayName, "abc", "Test Base", pTier,
