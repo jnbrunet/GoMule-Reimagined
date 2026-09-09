@@ -1,5 +1,6 @@
 package gomule.gui;
 
+import gomule.D2Files;
 import gomule.grail.D2GrailEntry;
 import gomule.grail.D2GrailFinding;
 import gomule.grail.D2GrailFirstSeenStore;
@@ -23,8 +24,13 @@ import java.awt.Color;
 import java.awt.Component;
 import java.awt.Image;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -294,6 +300,12 @@ public class D2GrailListRenderer extends JLabel implements ListCellRenderer<Obje
      * D2PropCollection pipeline D2ItemRenderer.getItemPropertyString uses for a real item's own
      * properties, just fed columns instead of a parsed item. Uniques carry prop1..prop12,
      * set items only prop1..prop9 (verified against ./d2111's column headers).
+     * <p>
+     * A missing RUNEWORD is a different shape entirely and takes its own path
+     * (appendMissingRuneword): its source row is a runes.txt row, which has no prop1..N columns at
+     * all (its properties live in T1Code1..T1Code7) and no single base item to take base stats
+     * from. Before that path existed, every one of those columns read back as "" and the tooltip
+     * came out as nothing but the runeword's name.
      */
     private static String missingTooltip(D2GrailEntry pEntry) {
         String lName = D2ItemRenderer.stripColorCodes(nullToEmpty(pEntry.getDisplayName()));
@@ -308,6 +320,15 @@ public class D2GrailListRenderer extends JLabel implements ListCellRenderer<Obje
         String lTierLabel = tierLabel(pEntry.getTier());
         if (!lTierLabel.isEmpty()) {
             lHtml.append(escapeHtml(lTierLabel)).append("<br>&#10;");
+        }
+
+        if (pEntry.getKey().getType() == D2GrailKey.Type.RUNEWORD) {
+            D2TxtFileItemProperties lRunesRow = pEntry.getSourceRow();
+            if (lRunesRow != null) {
+                appendMissingRuneword(lHtml, lRunesRow);
+            }
+            lHtml.append("</center></html>");
+            return lHtml.toString();
         }
 
         // Built BEFORE appendMissingBaseStats (even though the base-stat LINES it feeds print
@@ -355,6 +376,354 @@ public class D2GrailListRenderer extends JLabel implements ListCellRenderer<Obje
 
         lHtml.append("</center></html>");
         return lHtml.toString();
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Missing runewords
+    // ------------------------------------------------------------------------------------------
+
+    /**
+     * Which of gems.txt's three sets of mod columns a rune contributes through once it is socketed
+     * into a base: a weapon reads weaponMod1..3, a helm OR a body armor reads helmMod1..3, a shield
+     * reads shieldMod1..3. Exactly the same three-way split D2Item's own socket loop applies to a
+     * real found item (where it shows up as qFlags 7/8/9), and the same one D2Item.
+     * readPropertiesGems() walks -- this is the table-sourced counterpart of that method, for a
+     * runeword nobody has made yet.
+     */
+    private enum RuneSocketClass {
+        WEAPON("weaponMod", "In a Weapon"),
+        ARMOR("helmMod", "In Armor"),
+        SHIELD("shieldMod", "In a Shield");
+
+        private final String iColumnPrefix;
+        private final String iLabel;
+
+        RuneSocketClass(String pColumnPrefix, String pLabel) {
+            iColumnPrefix = pColumnPrefix;
+            iLabel = pLabel;
+        }
+    }
+
+    // itemtypes.txt's own "ItemType" column is the label for every runeword base type except these
+    // two, where the mod's wording describes something other than the slot and would read as an
+    // error in a tooltip: "helm" is labelled "Merc Equip" there (a note about who can wear it, not
+    // what it is), and "tors" is labelled plain "Armor", indistinguishable from the separate,
+    // broader "armo" type whose own label is "Any Armor". Everything else -- Sword, Polearm, Any
+    // Shield, Amazon Bow, Auric Shields, Voodoo Heads and the rest -- is taken verbatim from the
+    // table, so a mod update that adds a base type needs no change here.
+    private static final Map<String, String> ITYPE_LABEL_OVERRIDES = new HashMap<String, String>();
+
+    static {
+        ITYPE_LABEL_OVERRIDES.put("helm", "Helm");
+        ITYPE_LABEL_OVERRIDES.put("tors", "Body Armor");
+    }
+
+    /**
+     * A missing runeword's tooltip body: which bases it can be made in, the rune sequence, the
+     * level it needs, and what it grants -- everything the mod's own item page shows, since a
+     * runeword that has never been made has no D2Item to ask.
+     * <p>
+     * "What it grants" is two things added together, exactly as the game itself adds them: the
+     * runeword's OWN properties (runes.txt T1Code1..T1Code7 -- there are only seven slots) plus
+     * each rune's own gems.txt bonus for the kind of base it is socketed into. Confirmed against
+     * the mod's page for "Bulwark" (Shael + Io + Sol in a helm): three of its lines -- "+20% Faster
+     * Hit Recovery", "+10 to Vitality" and "Physical Damage Reduced by 7" -- appear nowhere in its
+     * runes.txt row at all, and are precisely the helmMod entries of those three runes.
+     * <p>
+     * The rune half depends on what the runeword is made in, and most runewords allow exactly one
+     * kind of base, so their rune bonuses are merged straight into the one property list the mod's
+     * page shows. 17 of the 208 runewords in ./d2111 span more than one kind (Spirit is swords OR
+     * shields; Fortitude is weapons, body armor OR shields) and the runes contribute differently to
+     * each, so those get one clearly-labelled block per kind after their own properties rather than
+     * a single merged list that would be right for at most one of them.
+     */
+    private static void appendMissingRuneword(StringBuilder pHtml, D2TxtFileItemProperties pRow) {
+        List<String> lItypes = runewordItypes(pRow);
+        if (!lItypes.isEmpty()) {
+            StringBuilder lBases = new StringBuilder();
+            for (String lItype : lItypes) {
+                if (lBases.length() > 0) {
+                    lBases.append(" / ");
+                }
+                lBases.append(itypeLabel(lItype));
+            }
+            pHtml.append(escapeHtml(lBases.toString())).append("<br>&#10;");
+        }
+
+        List<String> lRuneCodes = runewordRuneCodes(pRow);
+        if (!lRuneCodes.isEmpty()) {
+            StringBuilder lSequence = new StringBuilder();
+            for (String lRuneCode : lRuneCodes) {
+                if (lSequence.length() > 0) {
+                    lSequence.append(" + ");
+                }
+                String lName = runeName(lRuneCode);
+                lSequence.append(lName);
+                // The mod's own rune names already carry "(#13)"; only add it for a name that
+                // doesn't (an untranslated rune falling back to misc.txt's plain "Shael Rune").
+                int lNumber = runeNumber(lRuneCode);
+                if (lNumber > 0 && lName.indexOf('#') < 0) {
+                    lSequence.append(" (#").append(lNumber).append(")");
+                }
+            }
+            pHtml.append(escapeHtml(lSequence.toString())).append("<br>&#10;");
+
+            int lRequiredLevel = runewordRequiredLevel(lRuneCodes);
+            if (lRequiredLevel > 0) {
+                pHtml.append("Required Level: ").append(lRequiredLevel).append("<br>&#10;");
+            }
+        }
+
+        List<PropSlot> lSlots = new ArrayList<PropSlot>();
+        for (int i = 1; i <= 7; i++) {
+            // runes.txt spells the four columns T1Code/T1Param/T1Min/T1Max -- note that
+            // addSlotIfPresent, like propToStat itself, takes them in (code, min, max, param)
+            // order, not the order the file lists them in.
+            addSlotIfPresent(lSlots, pRow, "T1Code" + i, "T1Min" + i, "T1Max" + i, "T1Param" + i);
+        }
+
+        Set<RuneSocketClass> lClasses = runeSocketClasses(lItypes);
+        if (lClasses.size() == 1) {
+            addRuneModSlots(lSlots, lRuneCodes, lClasses.iterator().next());
+        }
+        pHtml.append(renderFlavouredProps(buildFlavouredProps(lSlots)));
+
+        if (lClasses.size() > 1) {
+            for (RuneSocketClass lClass : lClasses) {
+                List<PropSlot> lRuneSlots = new ArrayList<PropSlot>();
+                addRuneModSlots(lRuneSlots, lRuneCodes, lClass);
+                if (!lRuneSlots.isEmpty()) {
+                    pHtml.append("<font color='red'>").append(escapeHtml(lClass.iLabel)).append(": </font>")
+                            .append(renderFlavouredProps(buildFlavouredProps(lRuneSlots)));
+                }
+            }
+        }
+    }
+
+    /**
+     * The runeword's allowed base types (runes.txt itype1..itype6), in table order, de-duplicated.
+     */
+    private static List<String> runewordItypes(D2TxtFileItemProperties pRow) {
+        List<String> lOut = new ArrayList<String>();
+        for (int i = 1; i <= 6; i++) {
+            String lCode = nullToEmpty(pRow.get("itype" + i)).trim();
+            if (!lCode.isEmpty() && !lOut.contains(lCode)) {
+                lOut.add(lCode);
+            }
+        }
+        return lOut;
+    }
+
+    /**
+     * The runes the word is made of (runes.txt Rune1..Rune6), in order -- deliberately NOT
+     * de-duplicated: a word can legitimately use the same rune twice.
+     */
+    private static List<String> runewordRuneCodes(D2TxtFileItemProperties pRow) {
+        List<String> lOut = new ArrayList<String>();
+        for (int i = 1; i <= 6; i++) {
+            String lCode = nullToEmpty(pRow.get("Rune" + i)).trim();
+            if (!lCode.isEmpty()) {
+                lOut.add(lCode);
+            }
+        }
+        return lOut;
+    }
+
+    private static String itypeLabel(String pItypeCode) {
+        String lOverride = ITYPE_LABEL_OVERRIDES.get(pItypeCode);
+        if (lOverride != null) {
+            return lOverride;
+        }
+        D2TxtFileItemProperties lRow = D2TxtFile.ITEM_TYPES.searchColumns("Code", pItypeCode);
+        String lLabel = lRow == null ? "" : nullToEmpty(lRow.get("ItemType")).trim();
+        return lLabel.isEmpty() ? pItypeCode : lLabel;
+    }
+
+    /**
+     * A rune's display name, resolved the same way D2Item.readExtend resolves any base item's:
+     * the translation for its code, falling back to misc.txt's own "name" column when the tables
+     * carry no translation for it (and to the raw code if there is no row at all).
+     * <p>
+     * The mod's own rune strings are markup, not plain names: every one is colour-coded and
+     * already carries the rune number the guides print ("ÿc1Jah Rune ÿc9(ÿc0#31ÿc9)"), and the
+     * high runes add a second line, "ÿc;~Pick Up~ÿc0", that only makes sense on the ground. So the
+     * colour codes are stripped and everything after the first line break dropped, leaving
+     * "Jah Rune (#31)" -- which is why runeNumber() is only ever appended when the resulting name
+     * has no "#" of its own.
+     */
+    private static String runeName(String pRuneCode) {
+        D2TxtFileItemProperties lRow = D2TxtFile.search(pRuneCode);
+        if (lRow == null) {
+            return pRuneCode;
+        }
+        String lTableName = nullToEmpty(lRow.get("name"));
+        String lTranslated = D2Files.getInstance().getTranslations()
+                .getTranslationOrNull(pRuneCode, lTableName);
+        String lName = D2ItemRenderer.stripColorCodes(lTranslated != null ? lTranslated : lTableName);
+        int lBreak = lName.length();
+        for (int i = 0; i < lName.length(); i++) {
+            char lChar = lName.charAt(i);
+            if (lChar == '\n' || lChar == '\r') {
+                lBreak = i;
+                break;
+            }
+        }
+        lName = lName.substring(0, lBreak).trim();
+        return lName.isEmpty() ? pRuneCode : lName;
+    }
+
+    /**
+     * The rune's number as the game and every runeword guide print it ("Shael Rune (#13)") -- the
+     * digits of its item code, which run r01..r33 in order. 0 (not printed) for anything that
+     * doesn't parse, rather than a made-up number.
+     */
+    private static int runeNumber(String pRuneCode) {
+        StringBuilder lDigits = new StringBuilder();
+        for (int i = 0; i < pRuneCode.length(); i++) {
+            char lChar = pRuneCode.charAt(i);
+            if (lChar >= '0' && lChar <= '9') {
+                lDigits.append(lChar);
+            }
+        }
+        if (lDigits.length() == 0) {
+            return 0;
+        }
+        try {
+            return Integer.parseInt(lDigits.toString());
+        } catch (NumberFormatException pEx) {
+            return 0;
+        }
+    }
+
+    /**
+     * A runeword's level requirement is the highest level requirement among its runes -- runes.txt
+     * carries no level column of its own. Verified against the mod's own page for "Bulwark"
+     * (Shael 29 / Io 35 / Sol 27, shown as "Level 35"). 0 -- nothing printed -- if no rune has a
+     * usable levelreq, e.g. a word made only of Hel (levelreq 0).
+     */
+    private static int runewordRequiredLevel(List<String> pRuneCodes) {
+        int lMax = 0;
+        for (String lRuneCode : pRuneCodes) {
+            D2TxtFileItemProperties lRow = D2TxtFile.search(lRuneCode);
+            if (lRow == null) {
+                continue;
+            }
+            try {
+                lMax = Math.max(lMax, Integer.parseInt(nullToEmpty(lRow.get("levelreq")).trim()));
+            } catch (NumberFormatException pEx) {
+                // A blank or non-numeric levelreq contributes nothing, exactly like a 0 one.
+            }
+        }
+        return lMax;
+    }
+
+    /**
+     * Adds each rune's own gems.txt bonuses for one kind of base (up to three mod slots per rune)
+     * as ordinary property slots, so they run through the same range/render pipeline as the
+     * runeword's own properties and end up sorted and combined with them by D2PropCollection --
+     * two runes each granting +10 Vitality show as one "+20 to Vitality" line, exactly as a real
+     * socketed item does.
+     */
+    private static void addRuneModSlots(List<PropSlot> pInto, List<String> pRuneCodes, RuneSocketClass pClass) {
+        for (String lRuneCode : pRuneCodes) {
+            D2TxtFileItemProperties lGemRow = D2TxtFile.GEMS.searchColumns("code", lRuneCode);
+            if (lGemRow == null) {
+                continue;
+            }
+            for (int i = 1; i <= 3; i++) {
+                String lPrefix = pClass.iColumnPrefix + i;
+                addSlotIfPresent(pInto, lGemRow, lPrefix + "Code", lPrefix + "Min", lPrefix + "Max",
+                        lPrefix + "Param");
+            }
+        }
+    }
+
+    /**
+     * Which kinds of base this runeword can be made in, as far as the runes' own bonuses are
+     * concerned -- an itype that cannot be classified contributes nothing rather than a guess.
+     */
+    private static Set<RuneSocketClass> runeSocketClasses(List<String> pItypes) {
+        Set<RuneSocketClass> lOut = new LinkedHashSet<RuneSocketClass>();
+        for (String lItype : pItypes) {
+            RuneSocketClass lClass = runeSocketClassOf(lItype);
+            if (lClass != null) {
+                lOut.add(lClass);
+            }
+        }
+        return lOut;
+    }
+
+    /**
+     * Resolves one runes.txt itype code to the kind of base it names, from itemtypes.txt's own
+     * Equiv1/Equiv2 hierarchy rather than a hardcoded list, so a mod-added type is classified for
+     * free: walk up to the "shld"/"armo"/"weap" roots, checking shields FIRST because "shld" is
+     * itself an "armo" underneath.
+     * <p>
+     * The four class-item umbrella types runes.txt uses -- "pala", "barb", "drui", "necr", all of
+     * whose ancestry stops at the abstract "clas" -- name no kind of gear on their own, so they are
+     * resolved from their children instead: each has exactly one ("ashd" Auric Shields, "phlm"
+     * Barbarian Helms, "pelt" Druid Pelts, "head" Voodoo Heads), and each of those does resolve.
+     * Null when even that is ambiguous or absent, which no ./d2111 runeword hits today.
+     */
+    private static RuneSocketClass runeSocketClassOf(String pItypeCode) {
+        RuneSocketClass lByAncestry = runeSocketClassByAncestry(pItypeCode);
+        if (lByAncestry != null) {
+            return lByAncestry;
+        }
+        RuneSocketClass lFromChildren = null;
+        int lRows = D2TxtFile.ITEM_TYPES.getRowSize();
+        for (int i = 0; i < lRows; i++) {
+            D2TxtFileItemProperties lRow = D2TxtFile.ITEM_TYPES.getRow(i);
+            if (!pItypeCode.equals(lRow.get("Equiv1")) && !pItypeCode.equals(lRow.get("Equiv2"))) {
+                continue;
+            }
+            RuneSocketClass lChild = runeSocketClassByAncestry(lRow.get("Code"));
+            if (lChild == null || (lFromChildren != null && lFromChildren != lChild)) {
+                return null;
+            }
+            lFromChildren = lChild;
+        }
+        return lFromChildren;
+    }
+
+    private static RuneSocketClass runeSocketClassByAncestry(String pItypeCode) {
+        Set<String> lSeen = new HashSet<String>();
+        List<String> lPending = new ArrayList<String>();
+        lPending.add(pItypeCode);
+        boolean lShield = false;
+        boolean lArmor = false;
+        boolean lWeapon = false;
+        while (!lPending.isEmpty()) {
+            String lCode = lPending.remove(lPending.size() - 1);
+            if (lCode == null || lCode.isEmpty() || !lSeen.add(lCode)) {
+                continue;
+            }
+            if ("shld".equals(lCode)) {
+                lShield = true;
+            } else if ("armo".equals(lCode)) {
+                lArmor = true;
+            } else if ("weap".equals(lCode)) {
+                lWeapon = true;
+            }
+            D2TxtFileItemProperties lRow = D2TxtFile.ITEM_TYPES.searchColumns("Code", lCode);
+            if (lRow == null) {
+                continue;
+            }
+            lPending.add(nullToEmpty(lRow.get("Equiv1")).trim());
+            lPending.add(nullToEmpty(lRow.get("Equiv2")).trim());
+        }
+        // Shields first: every shield is an "armo" too, so testing armor first would send every
+        // shield down the helm/body-armor column set.
+        if (lShield) {
+            return RuneSocketClass.SHIELD;
+        }
+        if (lArmor) {
+            return RuneSocketClass.ARMOR;
+        }
+        if (lWeapon) {
+            return RuneSocketClass.WEAPON;
+        }
+        return null;
     }
 
     /**
@@ -1028,14 +1397,15 @@ public class D2GrailListRenderer extends JLabel implements ListCellRenderer<Obje
      * slot's original, unmodified columns to both passes instead, reproducing today's single
      * collapsed value exactly.
      * <p>
-     * uiRangeType 5 (skill/oskill, the level-range-plus-separate-skill-id shape) is deliberately
-     * excluded rather than "fixed and then ranged": that pairing is already fed to propToStat
-     * wrong in a completely separate, pre-existing way (propToStat always zeroes pVals[2] before
-     * building the D2Prop, so the skill id that "par" carries is lost, and D2Prop ends up reading
-     * pVals[0] -- the level -- as if it were the skill id). This method's job is only to decide
-     * what is safe to RANGE; layering a range on top of that unrelated bug is out of scope, so
-     * excluding uiRangeType 5 here simply keeps producing today's (already imperfect) output,
-     * unchanged, rather than making it worse.
+     * uiRangeType 5 (skill/oskill, the level-range-plus-separate-skill-id shape) stays excluded:
+     * its "min"/"max" are a skill LEVEL range whose skill id lives in the separate "par" column, so
+     * they are not one number's two ends any more than the other non-blank uiRangeTypes are.
+     * D2TxtFile.propToStat now resolves that par into the skill id itself (see its parNamesASkill /
+     * addSkillParamProps pair, added for the runeword tooltip's auras and granted skills), so these
+     * slots do render the right skill today -- at the top of their level range, which is what the
+     * single-pass path showed before. Ranging the level as well would be a separate change; this
+     * method's job is only to decide what is safe to RANGE, and a pair that is not one number is
+     * not.
      * <p>
      * A SECOND, independent exclusion, on top of uiRangeType: properties.txt's own func1/func2
      * columns can encode "min feeds one stat, max feeds a DIFFERENT stat" -- func1=15 paired with

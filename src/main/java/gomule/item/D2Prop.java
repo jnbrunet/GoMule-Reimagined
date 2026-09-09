@@ -356,7 +356,16 @@ public class D2Prop {
                 }
 
             case (11):
-
+                // "Repairs 1 Durability in 100/value Seconds" -- properties.txt's own wording for
+                // "rep-dur". A 0 value has no meaning here (it would be "repairs 1 durability every
+                // infinity seconds") and used to divide by zero, throwing out of generateDisplay
+                // and taking the whole tooltip that contained it down with it. Drop just the line
+                // instead: generateDisplay's callers already skip a null/empty result
+                // (D2PropCollection.generateDisplay), which is the same way every other unusable
+                // property degrades here.
+                if (pVals[0] == 0) {
+                    return null;
+                }
                 return "Repairs 1 Durability in " + (100 / pVals[0]) + " Seconds";
 
             case (12):

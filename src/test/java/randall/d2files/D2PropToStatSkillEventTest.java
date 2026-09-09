@@ -11,25 +11,28 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * D2TxtFile.propToStat()'s handling of properties.txt's two "cast a skill" shapes: the six
- * skill-on-event codes ("att-skill"/"hit-skill"/"gethit-skill"/"kill-skill"/"death-skill"/
- * "levelup-skill", uiRangeType 7) and the charge-granting "charged" (uiRangeType 6). Neither
- * stores the plain (min, max, par) triple the generic path assumes:
+ * D2TxtFile.propToStat()'s handling of the eleven properties.txt codes that hold an ID in "par"
+ * rather than a number -- the ones properties.txt's own "*Parameter" column marks "Skill" or
+ * "Class Skill Tab ID". None of them stores the plain (min, max, par) triple the generic path
+ * assumes:
  *
  * <pre>
- *   code        par      min                                   max
- *   *-skill     Skill    % Chance (If 0, then default to 5)    Skill Level
- *   charged     Skill    # of Max Charges                      Skill Level
+ *   code                                       par      min                 max
+ *   att/hit/gethit/kill/death/levelup-skill     Skill    % Chance (0 -&gt; 5)   Skill Level
+ *   charged                                    Skill    # of Max Charges    Skill Level
+ *   skill / oskill / aura                      Skill    Min level           Max level
+ *   skilltab                                   Tab id   Min level           Max level
  * </pre>
  *
- * Before this fix both rendered NOTHING at all in a missing item's grail tooltip, for two
+ * Before this fix all of them rendered NOTHING at all in a missing item's grail tooltip, for two
  * independent reasons: "par" holds a skill NAME in every uniqueitems.txt/setitems.txt/sets.txt/
- * runes.txt row that uses them (only magicsuffix.txt uses raw numeric ids), which propToStat's
- * pParam int-parse rejected by returning an empty list; and even with a numeric param, the generic
- * path zeroed pVals[2] and never filled pVals[1], while D2Prop's renderers for these stats
- * (descfunc 15 and 24) expect the [skill level, skill id, chance] / [skill level, skill id,
- * charges, max charges] layout that D2PropCollection.readProp() builds from a real item's
- * bitstream.
+ * runes.txt row that uses them (only magicsuffix.txt and "skilltab" use raw numbers), which
+ * propToStat's pParam int-parse rejected by returning an empty list; and even with a numeric param,
+ * the generic path zeroed pVals[2] and never filled pVals[1], while D2Prop's renderers for these
+ * stats expect the layouts D2PropCollection.readProp() builds from a real item's bitstream --
+ * [skill level, skill id, chance] for the six skill-on-event stats (descfunc 15), [skill level,
+ * skill id, charges, max charges] for item_charged_skill (descfunc 24), and the generic
+ * "Save Param Bits" [id, value] pair for the rest (descfunc 14/16/27/28).
  * <p>
  * The reported symptom, and this suite's headline case: Schaefer's Hammer (uniqueitems.txt *ID
  * 257, code 7wh) has prop1 "hit-skill" par="Static Field" min=10 max=10, i.e. "10% Chance to cast
@@ -163,6 +166,108 @@ public class D2PropToStatSkillEventTest {
         D2TxtFile.constructTxtFiles("./d2111");
         ArrayList stats = D2TxtFile.propToStat("oskill_hide", "1", "1", "Hidden Charm Passive", 0);
         assertTrue(stats.isEmpty(), "oskill_hide must keep resolving to no props: " + stats);
+    }
+
+    /**
+     * "aura" (item_aura, *ID 151, descfunc 16) is the same skill-name-in-par shape, with the
+     * generic [skill id, level] layout rather than the skill-on-event triple. Real row: the runeword
+     * "Insight", T1Code6 "aura" par="Meditation" min=12 max=17 -- the entire point of that runeword,
+     * and absent from its grail tooltip until propToStat could resolve the name.
+     */
+    @Test
+    public void auraResolvesItsSkillNameAndLevel() {
+        D2TxtFile.constructTxtFiles("./d2111");
+        ArrayList stats = D2TxtFile.propToStat("aura", "12", "17", "Meditation", 0);
+
+        assertEquals(1, stats.size(), "aura must resolve to exactly one prop: " + stats);
+        D2Prop prop = (D2Prop) stats.get(0);
+        assertEquals(151, prop.getPNum(), "item_aura is itemstatcost.txt *ID 151");
+        assertEquals(120, prop.getPVals()[0], "pVals[0] is the skill id -- skills.txt Meditation is 120");
+        assertEquals(17, prop.getPVals()[1], "pVals[1] is the level (the max column)");
+        assertTrue(render(stats).contains("Meditation Aura When Equipped"), render(stats));
+    }
+
+    /**
+     * "oskill" is the one code in this family with TWO stats -- stat1 item_nonclassskill_display
+     * (387) and stat2 item_nonclassskill (97) -- and both have to be emitted with the same skill id.
+     * A 97 with no matching 387 is exactly what D2PropCollection.isHiddenSkillGrant treats as an
+     * internal, never-displayed grant, so dropping the 387 would silently hide the bonus. Real row:
+     * the runeword "Enigma", whose "+1 to Teleport" is an oskill.
+     */
+    @Test
+    public void oskillEmitsBothItsStatsWithTheSameSkill() {
+        D2TxtFile.constructTxtFiles("./d2111");
+        ArrayList stats = D2TxtFile.propToStat("oskill", "1", "1", "Teleport", 0);
+
+        assertEquals(2, stats.size(), "oskill has two stats: " + stats);
+        D2Prop display = (D2Prop) stats.get(0);
+        D2Prop grant = (D2Prop) stats.get(1);
+        assertEquals(387, display.getPNum(), "stat1 is item_nonclassskill_display");
+        assertEquals(97, grant.getPNum(), "stat2 is item_nonclassskill");
+        assertEquals(54, display.getPVals()[0], "skills.txt Teleport is 54");
+        assertEquals(54, grant.getPVals()[0], "both stats must carry the same skill id");
+        assertTrue(render(stats).contains("+1 to Teleport"), render(stats));
+    }
+
+    /**
+     * "skilltab" numbers the game's skill tabs sequentially in its "par" column -- 0-20 for the
+     * seven vanilla classes, three per class in class order, plus 21-23 for the mod's Warlock -- but
+     * stat 188 STORES the global "class * 8 + tab position" index, and that is the numbering
+     * D2Prop.getSkillTree() decodes. Real row: the runeword "Exile" (a Paladin shield word),
+     * T1Param5 = 10, which is class 3 tab 1 -> stored id 25. Unconverted it rendered as the
+     * Sorceress's Cold tab.
+     */
+    @Test
+    public void skilltabConvertsTheTableTabIdToTheStoredOne() {
+        D2TxtFile.constructTxtFiles("./d2111");
+        ArrayList stats = D2TxtFile.propToStat("skilltab", "2", "2", "10", 0);
+
+        assertEquals(1, stats.size(), stats.toString());
+        D2Prop prop = (D2Prop) stats.get(0);
+        assertEquals(188, prop.getPNum(), "item_addskill_tab is itemstatcost.txt *ID 188");
+        assertEquals(25, prop.getPVals()[0], "table tab 10 (Paladin, tab 1) is stored as 3 * 8 + 1");
+        String rendered = render(stats);
+        assertTrue(rendered.contains("+2 to Offensive Aura Skills (Paladin Only)"), rendered);
+        assertFalse(rendered.contains("Sorceress"), rendered);
+    }
+
+    /**
+     * A second, unrelated "the value is in par" family the same tooltip work uncovered: a property
+     * with NOTHING in its min/max columns keeps its single fixed value in "par". "rep-dur"
+     * (item_replenish_durability) is the one that did more than print a wrong number -- its
+     * renderer is descfunc 11, "Repairs 1 Durability in 100/value Seconds", so resolving to 0 threw
+     * ArithmeticException out of D2Prop.generateDisplay and blanked the whole tooltip. Real row: the
+     * runeword "Exile", T1Code7 "rep-dur" par=25 -> one durability every 4 seconds.
+     */
+    @Test
+    public void repDurTakesItsValueFromPar() {
+        D2TxtFile.constructTxtFiles("./d2111");
+        String rendered = render(D2TxtFile.propToStat("rep-dur", "", "", "25", 0));
+        assertTrue(rendered.contains("Repairs 1 Durability in 4 Seconds"), rendered);
+    }
+
+    /**
+     * The same par-holds-the-value rule, on the family that merely printed 0: "rep-quant"
+     * (item_replenish_quantity, 107 slots across ./d2111 -- every throwing weapon's "Replenishes
+     * quantity") and the one-off "sock" slots.
+     */
+    @Test
+    public void otherBlankMinMaxPropertiesTakeTheirValueFromParToo() {
+        D2TxtFile.constructTxtFiles("./d2111");
+        assertEquals(25, ((D2Prop) D2TxtFile.propToStat("rep-quant", "", "", "25", 0).get(0)).getPVals()[0]);
+        assertEquals(3, ((D2Prop) D2TxtFile.propToStat("sock", "", "", "3", 0).get(0)).getPVals()[0]);
+    }
+
+    /**
+     * A 0 repair rate has no meaning and must not divide by zero out of the renderer -- it drops
+     * just that line, the way every other unusable property degrades. Guards the case propToStat no
+     * longer produces from real data, so one odd row can never blank a whole tooltip again.
+     */
+    @Test
+    public void aZeroRepairRateDropsItsLineRatherThanThrowing() {
+        D2TxtFile.constructTxtFiles("./d2111");
+        D2Prop prop = new D2Prop(252, new int[]{0}, 0);
+        assertEquals(null, prop.generateDisplay(0, 99), "a 0 repair rate renders nothing");
     }
 
     private static String render(ArrayList stats) {
