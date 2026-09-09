@@ -8,11 +8,13 @@ import gomule.grail.D2GrailFinding;
 import gomule.grail.D2GrailFirstSeenStore;
 import gomule.grail.D2GrailKey;
 import gomule.grail.D2GrailModel;
+import gomule.grail.D2GrailRunewords;
 import gomule.grail.D2GrailScanner;
 import gomule.item.D2Item;
 import gomule.item.D2ItemRenderer;
 import gomule.util.D2Project;
 
+import javax.swing.BorderFactory;
 import javax.swing.BoxLayout;
 import javax.swing.DefaultListModel;
 import javax.swing.JButton;
@@ -43,6 +45,8 @@ import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
+import java.awt.GridLayout;
+import java.awt.Insets;
 import java.awt.event.ActionListener;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
@@ -59,6 +63,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 
 /**
  * The Holy Grail window (plan section 2/3): lists every collectible unique, set item and complete
@@ -111,6 +116,9 @@ public class D2ViewGrail extends JInternalFrame implements D2ItemContainer, D2It
     private JCheckBox iTierElite;
     private JComboBox<String> iShowCombo;
     private JCheckBox iIncludeNonChronicle;
+    private JPanel iRuneFilterPanel;
+    private final List<JToggleButton> iRuneButtons = new ArrayList<JToggleButton>();
+    private JCheckBox iRunePartialMatch;
     private JLabel iPartialLoadBanner;
     private JTree iTree;
     private DefaultTreeModel iTreeModel;
@@ -147,7 +155,10 @@ public class D2ViewGrail extends JInternalFrame implements D2ItemContainer, D2It
         });
 
         connect();
-        setSize(820, 560);
+        // Taller and wider than the other views on purpose: the Runewords tab's rune panel is three
+        // rows of eleven toggles, and at the old 820x560 it left the list itself only a few visible
+        // rows on that tab.
+        setSize(900, 680);
         // A JInternalFrame is NOT visible by default: adding it to the JDesktopPane (which is what
         // D2FileManager.addToOpenWindows does) is not enough to make it appear on screen. Without
         // this the window is constructed, sized and wired up correctly but stays invisible, so
@@ -223,6 +234,10 @@ public class D2ViewGrail extends JInternalFrame implements D2ItemContainer, D2It
         iIncludeNonChronicle.addActionListener(pEvent -> onIncludeNonChronicleChanged());
         lChronicleRow.add(iIncludeNonChronicle);
         lTopPanel.add(lChronicleRow);
+
+        iRuneFilterPanel = buildRuneFilterPanel();
+        iRuneFilterPanel.setVisible(false);
+        lTopPanel.add(iRuneFilterPanel);
 
         iPartialLoadBanner = new JLabel(" ");
         iPartialLoadBanner.setOpaque(true);
@@ -336,6 +351,70 @@ public class D2ViewGrail extends JInternalFrame implements D2ItemContainer, D2It
         rebuildTree();
     }
 
+    /**
+     * The Runewords tab's "which runes do I have?" panel: one toggle per rune, El (1) through Zod
+     * (33), laid out three rows of eleven, plus Select All / Deselect All and the partial-match
+     * switch. Shown only on that tab (see onTabChanged) -- a unique or set item is not made of
+     * runes, so the panel is hidden rather than greyed out there: unlike the tier checkboxes, which
+     * stay visible because they DO apply to two of the three tabs, this one applies to exactly one
+     * and would be 33 dead controls everywhere else.
+     * <p>
+     * Nothing selected means the filter is off and every runeword is listed -- see
+     * D2GrailModel.setSelectedRunes -- so the panel starts empty rather than fully ticked.
+     */
+    private JPanel buildRuneFilterPanel() {
+        JPanel lPanel = new JPanel(new BorderLayout());
+        lPanel.setBorder(BorderFactory.createTitledBorder("Runes I have"));
+
+        JPanel lGrid = new JPanel(new GridLayout(3, 11, 2, 2));
+        ActionListener lRuneListener = pEvent -> onRuneSelectionChanged();
+        for (int lRune = 1; lRune <= D2GrailRunewords.RUNE_COUNT; lRune++) {
+            JToggleButton lButton = new JToggleButton(D2GrailRunewords.runeShortName(lRune) + " " + lRune);
+            lButton.setMargin(new Insets(1, 2, 1, 2));
+            lButton.setToolTipText(D2GrailRunewords.runeShortName(lRune) + " Rune (#" + lRune + ")");
+            lButton.addActionListener(lRuneListener);
+            iRuneButtons.add(lButton);
+            lGrid.add(lButton);
+        }
+        lPanel.add(lGrid, BorderLayout.CENTER);
+
+        JPanel lRow = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        JButton lSelectAll = new JButton("Select All");
+        lSelectAll.addActionListener(pEvent -> setAllRunesSelected(true));
+        JButton lDeselectAll = new JButton("Deselect All");
+        lDeselectAll.addActionListener(pEvent -> setAllRunesSelected(false));
+        iRunePartialMatch = new JCheckBox("Show partial results (only some runes required)");
+        iRunePartialMatch.addActionListener(pEvent -> onRuneSelectionChanged());
+        lRow.add(lSelectAll);
+        lRow.add(lDeselectAll);
+        lRow.add(Box.createHorizontalStrut(12));
+        lRow.add(iRunePartialMatch);
+        lPanel.add(lRow, BorderLayout.SOUTH);
+
+        return lPanel;
+    }
+
+    private void setAllRunesSelected(boolean pSelected) {
+        for (JToggleButton lButton : iRuneButtons) {
+            lButton.setSelected(pSelected);
+        }
+        onRuneSelectionChanged();
+    }
+
+    private void onRuneSelectionChanged() {
+        Set<Integer> lSelected = new TreeSet<Integer>();
+        for (int i = 0; i < iRuneButtons.size(); i++) {
+            if (iRuneButtons.get(i).isSelected()) {
+                lSelected.add(Integer.valueOf(i + 1));
+            }
+        }
+        iModel.setSelectedRunes(lSelected);
+        iModel.setRunePartialMatch(iRunePartialMatch.isSelected());
+        refreshList();
+        // Deliberately no refreshStats(): like search, this narrows what is listed without changing
+        // what the grail is -- see D2GrailModel.passesRuneFilter.
+    }
+
     // ------------------------------------------------------------------------------------------
     // Control state -> model
     // ------------------------------------------------------------------------------------------
@@ -359,6 +438,12 @@ public class D2ViewGrail extends JInternalFrame implements D2ItemContainer, D2It
         iTierExceptional.setEnabled(lTiersApply);
         iTierElite.setEnabled(lTiersApply);
         iIncludeNonChronicle.setEnabled(lTiersApply);
+        iRuneFilterPanel.setVisible(!lTiersApply);
+        // setVisible() repaints but does not re-run the enclosing BoxLayout on its own, so without
+        // this the list below would keep the space the rune panel used to occupy (or not get it
+        // back) until the window is resized.
+        revalidate();
+        repaint();
 
         rebuildTree();
         refreshList();
@@ -462,9 +547,12 @@ public class D2ViewGrail extends JInternalFrame implements D2ItemContainer, D2It
      * Sets tab: All, then one leaf per sets.txt UIClass (General first, then one per class, in
      * D2GrailCategories.knownUiClassCodes()'s order).
      * <p>
-     * Runewords tab: All only -- a runeword's allowed bases are a list (itype1..itype6), not the
-     * one base category a tree node could filter on, so this tab deliberately has no sub-tree
-     * (a scope decision, not an oversight -- see the class javadoc's cross-reference).
+     * Runewords tab: All, then one leaf per base type any complete runeword allows -- Amazon Bow,
+     * Any Armor, Any Shield, Any Weapon, Armor, Assassin Claw, ... Warlock Grimoire -- read out of
+     * runes.txt's own itype1..itype6 columns (D2GrailRunewords.allBaseTypeLabels), alphabetically.
+     * A runeword allowing several of them appears under each: unlike a unique, which has exactly
+     * one base, a runeword's bases genuinely are a list, so the node means "words I can put in
+     * this" rather than "words whose base is this".
      */
     private void rebuildTree() {
         DefaultMutableTreeNode lRoot = new DefaultMutableTreeNode("root");
@@ -489,6 +577,11 @@ public class D2ViewGrail extends JInternalFrame implements D2ItemContainer, D2It
             for (String lCode : D2GrailCategories.knownUiClassCodes()) {
                 lRoot.add(new DefaultMutableTreeNode(
                         new TreeNodeData(D2GrailModel.classId(lCode), D2GrailCategories.getUiClassLabel(lCode))));
+            }
+        } else if (lTab == D2GrailKey.Type.RUNEWORD) {
+            for (String lLabel : D2GrailRunewords.allBaseTypeLabels()) {
+                lRoot.add(new DefaultMutableTreeNode(
+                        new TreeNodeData(D2GrailModel.baseTypeId(lLabel), lLabel)));
             }
         }
 

@@ -6,6 +6,7 @@ import gomule.grail.D2GrailFinding;
 import gomule.grail.D2GrailFirstSeenStore;
 import gomule.grail.D2GrailKey;
 import gomule.grail.D2GrailModel;
+import gomule.grail.D2GrailRunewords;
 import gomule.item.D2Item;
 import gomule.item.D2ItemRenderer;
 import gomule.item.D2Prop;
@@ -404,20 +405,6 @@ public class D2GrailListRenderer extends JLabel implements ListCellRenderer<Obje
         }
     }
 
-    // itemtypes.txt's own "ItemType" column is the label for every runeword base type except these
-    // two, where the mod's wording describes something other than the slot and would read as an
-    // error in a tooltip: "helm" is labelled "Merc Equip" there (a note about who can wear it, not
-    // what it is), and "tors" is labelled plain "Armor", indistinguishable from the separate,
-    // broader "armo" type whose own label is "Any Armor". Everything else -- Sword, Polearm, Any
-    // Shield, Amazon Bow, Auric Shields, Voodoo Heads and the rest -- is taken verbatim from the
-    // table, so a mod update that adds a base type needs no change here.
-    private static final Map<String, String> ITYPE_LABEL_OVERRIDES = new HashMap<String, String>();
-
-    static {
-        ITYPE_LABEL_OVERRIDES.put("helm", "Helm");
-        ITYPE_LABEL_OVERRIDES.put("tors", "Body Armor");
-    }
-
     /**
      * A missing runeword's tooltip body: which bases it can be made in, the rune sequence, the
      * level it needs, and what it grants -- everything the mod's own item page shows, since a
@@ -438,19 +425,20 @@ public class D2GrailListRenderer extends JLabel implements ListCellRenderer<Obje
      * a single merged list that would be right for at most one of them.
      */
     private static void appendMissingRuneword(StringBuilder pHtml, D2TxtFileItemProperties pRow) {
-        List<String> lItypes = runewordItypes(pRow);
-        if (!lItypes.isEmpty()) {
+        List<String> lItypes = D2GrailRunewords.itypeCodes(pRow);
+        List<String> lBaseLabels = D2GrailRunewords.baseTypeLabels(pRow);
+        if (!lBaseLabels.isEmpty()) {
             StringBuilder lBases = new StringBuilder();
-            for (String lItype : lItypes) {
+            for (String lLabel : lBaseLabels) {
                 if (lBases.length() > 0) {
                     lBases.append(" / ");
                 }
-                lBases.append(itypeLabel(lItype));
+                lBases.append(lLabel);
             }
             pHtml.append(escapeHtml(lBases.toString())).append("<br>&#10;");
         }
 
-        List<String> lRuneCodes = runewordRuneCodes(pRow);
+        List<String> lRuneCodes = D2GrailRunewords.runeCodes(pRow);
         if (!lRuneCodes.isEmpty()) {
             StringBuilder lSequence = new StringBuilder();
             for (String lRuneCode : lRuneCodes) {
@@ -461,7 +449,7 @@ public class D2GrailListRenderer extends JLabel implements ListCellRenderer<Obje
                 lSequence.append(lName);
                 // The mod's own rune names already carry "(#13)"; only add it for a name that
                 // doesn't (an untranslated rune falling back to misc.txt's plain "Shael Rune").
-                int lNumber = runeNumber(lRuneCode);
+                int lNumber = D2GrailRunewords.runeNumber(lRuneCode);
                 if (lNumber > 0 && lName.indexOf('#') < 0) {
                     lSequence.append(" (#").append(lNumber).append(")");
                 }
@@ -501,45 +489,6 @@ public class D2GrailListRenderer extends JLabel implements ListCellRenderer<Obje
     }
 
     /**
-     * The runeword's allowed base types (runes.txt itype1..itype6), in table order, de-duplicated.
-     */
-    private static List<String> runewordItypes(D2TxtFileItemProperties pRow) {
-        List<String> lOut = new ArrayList<String>();
-        for (int i = 1; i <= 6; i++) {
-            String lCode = nullToEmpty(pRow.get("itype" + i)).trim();
-            if (!lCode.isEmpty() && !lOut.contains(lCode)) {
-                lOut.add(lCode);
-            }
-        }
-        return lOut;
-    }
-
-    /**
-     * The runes the word is made of (runes.txt Rune1..Rune6), in order -- deliberately NOT
-     * de-duplicated: a word can legitimately use the same rune twice.
-     */
-    private static List<String> runewordRuneCodes(D2TxtFileItemProperties pRow) {
-        List<String> lOut = new ArrayList<String>();
-        for (int i = 1; i <= 6; i++) {
-            String lCode = nullToEmpty(pRow.get("Rune" + i)).trim();
-            if (!lCode.isEmpty()) {
-                lOut.add(lCode);
-            }
-        }
-        return lOut;
-    }
-
-    private static String itypeLabel(String pItypeCode) {
-        String lOverride = ITYPE_LABEL_OVERRIDES.get(pItypeCode);
-        if (lOverride != null) {
-            return lOverride;
-        }
-        D2TxtFileItemProperties lRow = D2TxtFile.ITEM_TYPES.searchColumns("Code", pItypeCode);
-        String lLabel = lRow == null ? "" : nullToEmpty(lRow.get("ItemType")).trim();
-        return lLabel.isEmpty() ? pItypeCode : lLabel;
-    }
-
-    /**
      * A rune's display name, resolved the same way D2Item.readExtend resolves any base item's:
      * the translation for its code, falling back to misc.txt's own "name" column when the tables
      * carry no translation for it (and to the raw code if there is no row at all).
@@ -570,29 +519,6 @@ public class D2GrailListRenderer extends JLabel implements ListCellRenderer<Obje
         }
         lName = lName.substring(0, lBreak).trim();
         return lName.isEmpty() ? pRuneCode : lName;
-    }
-
-    /**
-     * The rune's number as the game and every runeword guide print it ("Shael Rune (#13)") -- the
-     * digits of its item code, which run r01..r33 in order. 0 (not printed) for anything that
-     * doesn't parse, rather than a made-up number.
-     */
-    private static int runeNumber(String pRuneCode) {
-        StringBuilder lDigits = new StringBuilder();
-        for (int i = 0; i < pRuneCode.length(); i++) {
-            char lChar = pRuneCode.charAt(i);
-            if (lChar >= '0' && lChar <= '9') {
-                lDigits.append(lChar);
-            }
-        }
-        if (lDigits.length() == 0) {
-            return 0;
-        }
-        try {
-            return Integer.parseInt(lDigits.toString());
-        } catch (NumberFormatException pEx) {
-            return 0;
-        }
     }
 
     /**

@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.regex.Pattern;
 
 /**
@@ -54,6 +55,7 @@ public final class D2GrailModel {
     private static final String ROOT_PREFIX = "ROOT:";
     private static final String CATEGORY_PREFIX = "CAT:";
     private static final String CLASS_PREFIX = "CLASS:";
+    private static final String BASE_PREFIX = "BASE:";
 
     public static String rootId(D2GrailCategories.RootGroup pRoot) {
         return ROOT_PREFIX + pRoot.name();
@@ -66,6 +68,15 @@ public final class D2GrailModel {
     /**
      * @param pUiClassCode a sets.txt UIClass code, "" for General.
      */
+    /**
+     * The Runewords tab's tree ids: one per base-type LABEL (see D2GrailRunewords.baseTypeLabels),
+     * not per itype code, because two codes can share a label -- the Necromancer's "necr" and
+     * "head" are the same piece of gear and must be one filter entry, not two identical ones.
+     */
+    public static String baseTypeId(String pBaseTypeLabel) {
+        return BASE_PREFIX + pBaseTypeLabel;
+    }
+
     public static String classId(String pUiClassCode) {
         return CLASS_PREFIX + (pUiClassCode == null ? "" : pUiClassCode);
     }
@@ -80,6 +91,8 @@ public final class D2GrailModel {
     private String iCategorySelection = ALL_ID;
     private Status iStatus = Status.ALL;
     private String iSearchText = "";
+    private final Set<Integer> iSelectedRunes = new TreeSet<Integer>();
+    private boolean iRunePartialMatch = false;
 
     // Memo for setPassesTier(): set name -> "at least one of this set's pieces is in an enabled
     // tier". Depends only on the tier checkboxes and the Chronicle scope, so it is cleared exactly
@@ -207,6 +220,43 @@ public final class D2GrailModel {
         iSearchText = pText == null ? "" : pText;
     }
 
+    /**
+     * Which runes the player has, as rune numbers 1..33 ("which runewords can I make?"). An EMPTY
+     * selection means the filter is off entirely -- every runeword is listed -- rather than "no
+     * runes, so nothing matches", which would leave the tab looking broken until the first click.
+     * <p>
+     * Runewords tab only, like the tier checkboxes are Uniques/Sets only: a unique or set item is
+     * not made of runes, so this never touches those tabs, and a selection left over from the
+     * Runewords tab is simply inert there rather than needing to be cleared on every tab switch.
+     */
+    public void setSelectedRunes(Set<Integer> pRuneNumbers) {
+        iSelectedRunes.clear();
+        if (pRuneNumbers != null) {
+            iSelectedRunes.addAll(pRuneNumbers);
+        }
+    }
+
+    public Set<Integer> getSelectedRunes() {
+        return Collections.unmodifiableSet(iSelectedRunes);
+    }
+
+    /**
+     * How the rune selection matches: false (the default) lists only the runewords the selection
+     * can actually complete -- every rune of the word is one the player has; true lists every word
+     * that uses AT LEAST ONE selected rune, i.e. "what am I part-way to?".
+     * <p>
+     * Multiplicity is deliberately not modelled: the selection is "do I have this rune", not "how
+     * many", so a word needing two Hel matches on one Hel. Counting copies would need the filter to
+     * be fed the player's actual inventory rather than a set of checkboxes.
+     */
+    public void setRunePartialMatch(boolean pPartial) {
+        iRunePartialMatch = pPartial;
+    }
+
+    public boolean isRunePartialMatch() {
+        return iRunePartialMatch;
+    }
+
     public String getSearchText() {
         return iSearchText;
     }
@@ -288,7 +338,7 @@ public final class D2GrailModel {
                 continue;
             }
 
-            if (!passesSearch(lEntry)) {
+            if (!passesSearch(lEntry) || !passesRuneFilter(lEntry)) {
                 continue;
             }
             lOut.add(new Row(lEntry, lFinding));
@@ -580,8 +630,15 @@ public final class D2GrailModel {
      * see setCategorySelection's javadoc -- except ALL_ID, which always matches everywhere.
      */
     private boolean matchesCategory(D2GrailEntry pEntry, String pSelection) {
-        if (pSelection == null || ALL_ID.equals(pSelection) || iTab == D2GrailKey.Type.RUNEWORD) {
+        if (pSelection == null || ALL_ID.equals(pSelection)) {
             return true;
+        }
+        if (iTab == D2GrailKey.Type.RUNEWORD) {
+            if (!pSelection.startsWith(BASE_PREFIX)) {
+                return false;
+            }
+            return D2GrailRunewords.baseTypeLabels(pEntry.getSourceRow())
+                    .contains(pSelection.substring(BASE_PREFIX.length()));
         }
         if (iTab == D2GrailKey.Type.SET) {
             if (!pSelection.startsWith(CLASS_PREFIX)) {
@@ -615,6 +672,38 @@ public final class D2GrailModel {
             default:
                 return true;
         }
+    }
+
+    /**
+     * The Runewords tab's rune filter -- see {@link #setSelectedRunes}. Inert everywhere else and
+     * inert while nothing is selected.
+     * <p>
+     * Applied alongside {@link #passesSearch} in {@link #getRows()} and deliberately NOT in
+     * {@link #progressFor}: like search, this narrows what is LISTED without changing what the
+     * grail is. The progress bars answer "how much of the grail do I have", which is not a question
+     * about which runes are in the cube right now -- and a denominator that moved every time a rune
+     * was ticked would make them unreadable.
+     */
+    private boolean passesRuneFilter(D2GrailEntry pEntry) {
+        if (iTab != D2GrailKey.Type.RUNEWORD || iSelectedRunes.isEmpty()) {
+            return true;
+        }
+        List<Integer> lNeeded = D2GrailRunewords.runeNumbers(pEntry.getSourceRow());
+        if (lNeeded.isEmpty()) {
+            // No usable rune list at all (should not happen for a complete=1 row): show it rather
+            // than hide it, the same "degrade towards visible" stance the rest of this class takes.
+            return true;
+        }
+        for (Integer lRune : lNeeded) {
+            boolean lHave = iSelectedRunes.contains(lRune);
+            if (iRunePartialMatch && lHave) {
+                return true;
+            }
+            if (!iRunePartialMatch && !lHave) {
+                return false;
+            }
+        }
+        return !iRunePartialMatch;
     }
 
     private boolean passesSearch(D2GrailEntry pEntry) {
