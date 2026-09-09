@@ -246,16 +246,15 @@ public class D2GrailModelTest {
     }
 
     /**
-     * "Decide 'has a found piece' from entries that pass the STRUCTURAL filters -- Chronicle
-     * scope, tier, and the tree/class selection": if the only owned piece is a tier the player has
-     * unchecked, that piece would not itself be visible, so it must not be able to resurrect the
-     * rest of the set either.
+     * The tier filter decides whether a SET is shown, never which of its pieces are (see
+     * D2GrailModel.passesTier). A set with NO piece in any enabled tier is still suppressed
+     * completely -- so the checkboxes keep narrowing the list, they just never show half a set.
      */
     @Test
-    public void tierFilterStillSuppressesASetWhoseOnlyFoundPieceIsFilteredOut() {
+    public void tierFilterStillSuppressesASetWithNoPieceInAnEnabledTier() {
         D2GrailEntry lEliteFound = setPiece("Test Set", "Elite Piece", 91001, D2GrailEntry.Tier.ELITE);
-        D2GrailEntry lNormalMissing = setPiece("Test Set", "Normal Piece", 91002, D2GrailEntry.Tier.NORMAL);
-        D2GrailModel lModel = new D2GrailModel(Arrays.asList(lEliteFound, lNormalMissing));
+        D2GrailEntry lEliteMissing = setPiece("Test Set", "Other Elite Piece", 91002, D2GrailEntry.Tier.ELITE);
+        D2GrailModel lModel = new D2GrailModel(Arrays.asList(lEliteFound, lEliteMissing));
         lModel.setTab(D2GrailKey.Type.SET);
         lModel.setStatus(D2GrailModel.Status.FOUND);
         lModel.setTierEnabled(D2GrailEntry.Tier.ELITE, false);
@@ -265,7 +264,76 @@ public class D2GrailModelTest {
         lModel.setFindings(lFindings);
 
         assertTrue(lModel.getRows().isEmpty(),
-                "the only found piece is Elite, which is unchecked, so the set must not resurrect");
+                "every piece of this set is Elite, which is unchecked, so the set must not appear");
+        assertTrue(lModel.getSetGroups().isEmpty(), "no header either");
+    }
+
+    /**
+     * The reported bug: with "Elite" alone checked, Immortal King listed 2 of its 6 pieces under a
+     * "0 / 2" header. Its pieces genuinely span three tiers -- a Normal Avenger Guard, three
+     * Exceptional War Belt/Gauntlets/Boots and an Elite Sacred Armor + Ogre Maul -- and filtering
+     * piece-by-piece tore the set apart, hiding the four pieces still needed to complete it and
+     * understating the set's size. A set is the unit the player tracks on this tab, so one
+     * qualifying piece shows the whole set: 6 rows under a "n / 6" header, whichever single tier is
+     * checked.
+     */
+    @Test
+    public void aTierFilterNeverSplitsASetAcrossTiers() {
+        D2TxtFile.constructTxtFiles("./d2111");
+        for (D2GrailEntry.Tier lOnlyTier : new D2GrailEntry.Tier[]{D2GrailEntry.Tier.NORMAL,
+                D2GrailEntry.Tier.EXCEPTIONAL, D2GrailEntry.Tier.ELITE}) {
+            D2GrailModel lModel = new D2GrailModel();
+            lModel.setTab(D2GrailKey.Type.SET);
+            for (D2GrailEntry.Tier lTier : D2GrailEntry.Tier.values()) {
+                lModel.setTierEnabled(lTier, lTier == lOnlyTier);
+            }
+
+            D2GrailModel.SetGroup lImmortalKing = null;
+            for (D2GrailModel.SetGroup lGroup : lModel.getSetGroups()) {
+                if ("Immortal King".equals(lGroup.getSetName())) {
+                    lImmortalKing = lGroup;
+                }
+            }
+            assertTrue(lImmortalKing != null, "Immortal King must show with only " + lOnlyTier + " checked");
+            assertEquals(6, lImmortalKing.getRows().size(),
+                    "all six pieces, with only " + lOnlyTier + " checked");
+            assertEquals(6, lImmortalKing.getTotal(),
+                    "and the header must state the set's real size, not the filtered one");
+        }
+    }
+
+    /**
+     * The counterpart: the checkboxes must still do something. "Sigon's Complete Steel" is entirely
+     * Normal/Exceptional in ./d2111, so checking Elite alone must remove it from the list
+     * altogether, rather than the set-level rule turning the filter into a no-op.
+     */
+    @Test
+    public void aTierFilterStillRemovesSetsEntirelyOutsideIt() {
+        D2TxtFile.constructTxtFiles("./d2111");
+        D2GrailModel lModel = new D2GrailModel();
+        lModel.setTab(D2GrailKey.Type.SET);
+
+        int lAllTiers = lModel.getSetGroups().size();
+
+        for (D2GrailEntry.Tier lTier : D2GrailEntry.Tier.values()) {
+            lModel.setTierEnabled(lTier, lTier == D2GrailEntry.Tier.ELITE);
+        }
+        int lEliteOnly = lModel.getSetGroups().size();
+
+        assertTrue(lEliteOnly < lAllTiers,
+                "Elite-only must show fewer sets than every tier does: " + lEliteOnly + " vs " + lAllTiers);
+        for (D2GrailModel.SetGroup lGroup : lModel.getSetGroups()) {
+            boolean lHasElite = false;
+            for (D2GrailEntry lEntry : D2GrailIndex.getEntries()) {
+                if (lEntry.getKey().getType() == D2GrailKey.Type.SET
+                        && lGroup.getSetName().equals(lEntry.getSetName())
+                        && lEntry.isChronicle()
+                        && lEntry.getTier() == D2GrailEntry.Tier.ELITE) {
+                    lHasElite = true;
+                }
+            }
+            assertTrue(lHasElite, lGroup.getSetName() + " has no Elite piece and must not be listed");
+        }
     }
 
     /**

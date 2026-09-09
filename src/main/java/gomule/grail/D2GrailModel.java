@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.EnumSet;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -80,6 +81,12 @@ public final class D2GrailModel {
     private Status iStatus = Status.ALL;
     private String iSearchText = "";
 
+    // Memo for setPassesTier(): set name -> "at least one of this set's pieces is in an enabled
+    // tier". Depends only on the tier checkboxes and the Chronicle scope, so it is cleared exactly
+    // when either changes and nowhere else -- the entry list itself never changes for the life of a
+    // model. Without it, the Sets tab would walk every set item once per row, per repaint.
+    private final Map<String, Boolean> iSetTierPass = new HashMap<>();
+
     /**
      * Production constructor: filters over the real, complete grail index. Requires
      * {@code D2TxtFile.constructTxtFiles(...)} to already have been called, exactly like
@@ -146,6 +153,7 @@ public final class D2GrailModel {
         } else {
             iEnabledTiers.remove(pTier);
         }
+        iSetTierPass.clear();
     }
 
     public boolean isTierEnabled(D2GrailEntry.Tier pTier) {
@@ -160,6 +168,7 @@ public final class D2GrailModel {
      */
     public void setIncludeNonChronicle(boolean pInclude) {
         iIncludeNonChronicle = pInclude;
+        iSetTierPass.clear();
     }
 
     public boolean isIncludeNonChronicle() {
@@ -500,12 +509,63 @@ public final class D2GrailModel {
      * Tier checkboxes apply on the Uniques and Sets tabs (both have base items with a real tier)
      * and are inert on Runewords, where every entry is {@link D2GrailEntry.Tier#NONE} and the
      * window disables the checkboxes rather than relying on this always returning true.
+     * <p>
+     * On the Sets tab the filter is applied to the SET, not to the individual piece: a piece
+     * passes when ANY piece of its set does. A set's pieces routinely span tiers -- Immortal King
+     * is built on a Normal Avenger Guard, three Exceptional War Belt/Gauntlets/Boots and an Elite
+     * Sacred Armor + Ogre Maul -- so filtering piece-by-piece tore sets apart: with Elite alone
+     * checked, Immortal King listed 2 of its 6 pieces under a "0 / 2" header, hiding the four
+     * pieces still needed to complete it and understating the set's real size. That is the same
+     * complaint, and the same answer, as the Sets + Show: Found rule in {@link #getRows()}: on this
+     * tab the set is the unit the player tracks, so a filter decides whether a SET is shown, never
+     * which of its pieces are. The checkboxes still narrow the list -- a set with no piece in any
+     * enabled tier disappears entirely, so "Elite only" still means "sets with an Elite piece" --
+     * they just no longer show half a set.
+     * <p>
+     * Applied here, in the shared predicate, rather than in getRows() alone, so every consumer
+     * agrees: the set-group header's "n / total" ({@link #getSetGroups()}), the two progress bars
+     * ({@link #progressFor}) and the Show: Found set detection
+     * ({@link #setNamesWithAStructurallyFoundPiece()}) all count the same whole sets the list shows.
+     * The Uniques tab is untouched -- a unique is its own unit and its tier is its own.
      */
     private boolean passesTier(D2GrailEntry pEntry) {
         if (iTab == D2GrailKey.Type.RUNEWORD) {
             return true;
         }
+        if (iTab == D2GrailKey.Type.SET) {
+            return setPassesTier(nullToEmpty(pEntry.getSetName()));
+        }
         return iEnabledTiers.contains(pEntry.getTier());
+    }
+
+    /**
+     * True when at least one piece of this set is in an enabled tier -- see {@link #passesTier}.
+     * The qualifying piece must also be inside the current Chronicle scope, for the same reason
+     * {@link #setNamesWithAStructurallyFoundPiece()} checks scope: a piece the scope hides is not
+     * a piece the player is being shown, so it must not pull the rest of its set into view either.
+     * Memoized per set name in {@link #iSetTierPass}, which {@link #setTierEnabled} and
+     * {@link #setIncludeNonChronicle} clear.
+     */
+    private boolean setPassesTier(String pSetName) {
+        Boolean lCached = iSetTierPass.get(pSetName);
+        if (lCached != null) {
+            return lCached;
+        }
+        boolean lPasses = false;
+        for (D2GrailEntry lEntry : iAllEntries) {
+            if (lEntry.getKey().getType() != D2GrailKey.Type.SET) {
+                continue;
+            }
+            if (!pSetName.equals(nullToEmpty(lEntry.getSetName()))) {
+                continue;
+            }
+            if (passesChronicleScope(lEntry) && iEnabledTiers.contains(lEntry.getTier())) {
+                lPasses = true;
+                break;
+            }
+        }
+        iSetTierPass.put(pSetName, lPasses);
+        return lPasses;
     }
 
     private boolean passesCategory(D2GrailEntry pEntry) {
