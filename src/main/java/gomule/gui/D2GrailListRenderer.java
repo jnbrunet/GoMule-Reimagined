@@ -15,12 +15,14 @@ import gomule.item.RequirementModifierAccumulator;
 import randall.d2files.D2TxtFile;
 import randall.d2files.D2TxtFileItemProperties;
 
+import javax.swing.BorderFactory;
 import javax.swing.GrayFilter;
 import javax.swing.Icon;
 import javax.swing.ImageIcon;
 import javax.swing.JLabel;
 import javax.swing.JList;
 import javax.swing.ListCellRenderer;
+import javax.swing.UIManager;
 import java.awt.Color;
 import java.awt.Component;
 import java.awt.Image;
@@ -69,10 +71,54 @@ public class D2GrailListRenderer extends JLabel implements ListCellRenderer<Obje
     // sync anyway since a future change to generateDisplay might start using it.
     private static final int ASSUMED_CHARACTER_LEVEL = 99;
 
+    /**
+     * A runeword has no artwork of its own -- runes.txt gives it no invfile, so the icon a missing
+     * runeword row showed was just its first rune's sprite, the same picture for every word made of
+     * (say) Tal -- and its whole description is table data nobody can recognise from a name. So on
+     * that tab the row IS the description: the same HTML the hover tooltip would have shown, drawn
+     * straight into the cell, on the tooltip's own black background so its gold/blue item colours
+     * read as intended. Uniques and set items keep the icon-and-name row: they have real sprites,
+     * and 400+ full descriptions would be a wall of text to scroll rather than a list to scan.
+     */
+    private final D2GrailFirstSeenStore iFirstSeenStore;
+
+    /**
+     * The rendered body of every MISSING runeword, keyed by entry. A missing entry's tooltip is a
+     * pure function of its .txt row (missingTooltip never looks at the findings or the first-seen
+     * store), and the tables never change at runtime -- the same reasoning that lets D2GrailIndex
+     * cache itself forever. Worth caching because JList asks the renderer for every row's size, not
+     * just the visible ones, whenever the model changes: building all 208 from scratch measures
+     * ~160ms, which would be paid again on every filter click. Found rows are deliberately not
+     * cached -- they depend on the live finding, and there are few of them.
+     * <p>
+     * Touched only from the event dispatch thread (a cell renderer), hence the plain HashMap.
+     */
+    private static final Map<D2GrailKey, String> MISSING_RUNEWORD_BODIES = new HashMap<D2GrailKey, String>();
+
     public D2GrailListRenderer() {
+        this(null);
+    }
+
+    /**
+     * @param pFirstSeenStore may be null -- the "First seen:" line is then simply omitted from an
+     *                        inline runeword body, exactly as it is from the hover tooltip.
+     */
+    public D2GrailListRenderer(D2GrailFirstSeenStore pFirstSeenStore) {
+        iFirstSeenStore = pFirstSeenStore;
         setOpaque(true);
         setIconTextGap(8);
         setVerticalAlignment(TOP);
+    }
+
+    /**
+     * True when this list element draws its whole description in the cell rather than an
+     * icon-and-name row -- see the iFirstSeenStore field's comment. Public so the window that owns
+     * the list can suppress the hover tooltip for exactly these rows: a popup repeating what is
+     * already on screen would only cover the rows below it.
+     */
+    public static boolean rendersDescriptionInline(Object pValue) {
+        return pValue instanceof D2GrailModel.Row
+                && ((D2GrailModel.Row) pValue).getEntry().getKey().getType() == D2GrailKey.Type.RUNEWORD;
     }
 
     @Override
@@ -86,12 +132,17 @@ public class D2GrailListRenderer extends JLabel implements ListCellRenderer<Obje
             return this;
         }
 
+        if (rendersDescriptionInline(pValue)) {
+            return inlineCell(pList, (D2GrailModel.Row) pValue, pIsSelected);
+        }
+
         renderRow(pList, (D2GrailModel.Row) pValue, pIsSelected);
         return this;
     }
 
     private void renderSetHeader(JList<?> pList, String pHeaderText, boolean pIsSelected) {
         setIcon(null);
+        setBorder(null);
         setToolTipText(null);
         setFont(pList.getFont().deriveFont(java.awt.Font.BOLD));
         setForeground(pIsSelected ? pList.getSelectionForeground() : pList.getForeground());
@@ -103,6 +154,7 @@ public class D2GrailListRenderer extends JLabel implements ListCellRenderer<Obje
         D2GrailFinding lFinding = pRow.getFinding();
         boolean lFound = pRow.isFound();
 
+        setBorder(null);
         setIcon(iconFor(lEntry, lFinding, lFound));
 
         String lName = D2ItemRenderer.stripColorCodes(nullToEmpty(lEntry.getDisplayName()));
@@ -144,6 +196,94 @@ public class D2GrailListRenderer extends JLabel implements ListCellRenderer<Obje
 
         setText(lHtml.toString());
         setForeground(pIsSelected ? pList.getSelectionForeground() : pList.getForeground());
+    }
+
+    /**
+     * One runeword row: the entry's whole description, exactly the HTML the hover tooltip carries,
+     * painted on the tooltip's own colours (UIManager's "ToolTip.background"/"ToolTip.foreground",
+     * which GoMule sets to black/white at startup) so the gold names and blue property lines read
+     * the way they were designed to. Falls back to white-on-black if a look-and-feel supplies
+     * neither.
+     * <p>
+     * Selection is shown with a border rather than a background, and the rows are separated by a
+     * thin rule: repainting the cell in the list's own selection colour would put light-on-light
+     * item text on it and make the selected row the one row nobody can read.
+     * <p>
+     * Returns a DIFFERENT JLabel per entry instead of reusing this renderer's own, which every
+     * other row type does. That is the one thing that makes a list of 208 full descriptions usable:
+     * Swing parses a label's HTML into a View and caches it on the label, keyed by the text, so a
+     * single shared label re-parses every row's HTML every time JList measures the list -- and
+     * JList measures EVERY row, not just the visible ones, whenever the model changes (a filter
+     * click, a rune toggle, a tab switch). Measured over the real 208: ~1.9s the first time and
+     * ~0.4s after with one shared label, against ~15ms once each row keeps its own. The labels are
+     * bounded by the number of runewords and built lazily.
+     */
+    private Component inlineCell(JList<?> pList, D2GrailModel.Row pRow, boolean pIsSelected) {
+        JLabel lCell = iInlineCells.get(pRow.getEntry().getKey());
+        if (lCell == null) {
+            lCell = new JLabel();
+            lCell.setOpaque(true);
+            lCell.setVerticalAlignment(TOP);
+            iInlineCells.put(pRow.getEntry().getKey(), lCell);
+        }
+        // Assigned only when they actually change: setFont and setText both throw away the cached
+        // HTML View, which is the whole point of keeping a label per row.
+        if (!pList.getFont().equals(lCell.getFont())) {
+            lCell.setFont(pList.getFont());
+        }
+        String lHtml = inlineBody(pRow);
+        if (!lHtml.equals(lCell.getText())) {
+            lCell.setText(lHtml);
+        }
+
+        Color lBackground = UIManager.getColor("ToolTip.background");
+        Color lForeground = UIManager.getColor("ToolTip.foreground");
+        lCell.setBackground(lBackground == null ? Color.BLACK : lBackground);
+        lCell.setForeground(lForeground == null ? Color.WHITE : lForeground);
+        lCell.setBorder(pIsSelected
+                ? BorderFactory.createLineBorder(pList.getSelectionBackground(), 2)
+                : BorderFactory.createMatteBorder(0, 2, 1, 2, SEPARATOR_COLOR));
+        return lCell;
+    }
+
+    // One prepared label per runeword entry -- see inlineCell. Bounded by the runeword count (208
+    // in ./d2111) and, like MISSING_RUNEWORD_BODIES, touched only from the event dispatch thread.
+    private final Map<D2GrailKey, JLabel> iInlineCells = new HashMap<D2GrailKey, JLabel>();
+
+    // The rule between two inline descriptions -- dark enough to sit on the tooltip's black
+    // background without competing with the item text above it.
+    private static final Color SEPARATOR_COLOR = new Color(64, 64, 64);
+
+    /**
+     * The HTML for one inline row: the entry's tooltip with its closing tag removed, a "Missing"
+     * marker added when it has not been found (a found entry needs none -- its own tooltip already
+     * ends with the "Found in:/Copies:/First seen:" footer), and the tag put back.
+     */
+    private String inlineBody(D2GrailModel.Row pRow) {
+        if (!pRow.isFound()) {
+            String lCached = MISSING_RUNEWORD_BODIES.get(pRow.getEntry().getKey());
+            if (lCached != null) {
+                return lCached;
+            }
+        }
+        String lTooltip = tooltipFor(pRow, iFirstSeenStore);
+        int lCloseTag = lTooltip.lastIndexOf("</html>");
+        String lBody = lCloseTag >= 0 ? lTooltip.substring(0, lCloseTag) : lTooltip;
+        if (!pRow.isFound()) {
+            String lMarker = "<br>&#10;<font size='-2' color='#808080'>Missing</font>";
+            // Slipped INSIDE the tooltip's own <center> when there is one, so the marker lines up
+            // under the description instead of jumping to the left edge on its own.
+            if (lBody.endsWith("</center>")) {
+                lBody = lBody.substring(0, lBody.length() - "</center>".length()) + lMarker + "</center>";
+            } else {
+                lBody = lBody + lMarker;
+            }
+        }
+        String lHtml = lBody + "</html>";
+        if (!pRow.isFound()) {
+            MISSING_RUNEWORD_BODIES.put(pRow.getEntry().getKey(), lHtml);
+        }
+        return lHtml;
     }
 
     /**

@@ -299,11 +299,17 @@ public class D2ViewGrail extends JInternalFrame implements D2ItemContainer, D2It
                 if (lIndex < 0) {
                     return null;
                 }
-                return D2GrailListRenderer.tooltipFor(getModel().getElementAt(lIndex), iFirstSeenStore);
+                Object lValue = getModel().getElementAt(lIndex);
+                if (D2GrailListRenderer.rendersDescriptionInline(lValue)) {
+                    // A runeword row already draws its whole description in the cell; a popup
+                    // repeating it would just cover the rows below.
+                    return null;
+                }
+                return D2GrailListRenderer.tooltipFor(lValue, iFirstSeenStore);
             }
         };
         iList.setToolTipText("");
-        iList.setCellRenderer(new D2GrailListRenderer());
+        iList.setCellRenderer(new D2GrailListRenderer(iFirstSeenStore));
         iList.addMouseListener(new MouseAdapter() {
             public void mouseClicked(MouseEvent pEvent) {
                 if (pEvent.getClickCount() != 2) {
