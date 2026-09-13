@@ -802,4 +802,32 @@ public class D2CharacterTest {
         assertTrue(veilOfSteel.getPropCollection().stream()
                 .anyMatch(o -> ((gomule.item.D2Prop) o).getPNum() == 16), "enhanced defense");
     }
+    // A classic quest item -- "type == ques" WITH a real misc.txt quest number, the family that
+    // isReimaginedQuestItem() deliberately excludes -- hits the dropped-padding-byte quirk when its
+    // body lands byte-aligned: "A Jade Figurine" (j34, quest 19) read one byte short, so the next
+    // item started a byte early and the whole rest of the file (34 of 59 items, including every
+    // equipped piece) was lost. The Horadric Cube in this same character is the control: also a
+    // classic quest item, but its body ends mid-byte, so it needs nothing and is untouched.
+    @Test
+    public void paladinWithByteAlignedQuestItemParsesFully() throws Exception {
+        D2TxtFile.constructTxtFiles("./d2111");
+        D2Character d2Character = new D2Character(
+                new File(Resources.getResource("charFiles/pally11.d2s").toURI()).getAbsolutePath());
+
+        assertEquals("Zealer", d2Character.getCharName());
+        assertFalse(d2Character.isItemsIncomplete(), d2Character.getItemsIncompleteReason());
+        assertEquals(59, d2Character.getItemList().size());
+
+        List<D2Item> items = d2Character.getItemList();
+        assertEquals("A Jade Figurine", items.get(24).getItemName());
+        // The items right after it are what the missing byte used to destroy: they decode into
+        // real, recognizable gear (not merely "nothing threw"), each in a sensible body slot.
+        assertEquals("Amulet of Warding", items.get(26).getItemName());
+        assertEquals("Fade to Black", items.get(27).getItemName());
+        assertEquals("Ferrit's Paw", items.get(28).getItemName());
+        // The control: the other classic quest item in this file, which ends mid-byte.
+        assertTrue(items.stream().anyMatch(i -> "Horadric Cube".equals(i.getItemName())),
+                "Horadric Cube still parses untouched");
+    }
+
 }

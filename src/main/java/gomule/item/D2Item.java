@@ -213,6 +213,14 @@ public class D2Item implements Comparable, D2ItemInterface {
         return "ques".equals(iType) && iItemType != null && "".equals(iItemType.get("quest"));
     }
 
+    // The other half of the "ques" family: the long-standing quest items (Horadric Cube, Khalim's
+    // organs, the Act 3 figurine/bird, etc.), which misc.txt marks with a real quest number. They
+    // carry no fixed trailing field -- see this method's only call site for the byte-alignment
+    // quirk they do hit.
+    private boolean isClassicQuestItem() {
+        return "ques".equals(iType) && iItemType != null && !"".equals(iItemType.get("quest"));
+    }
+
     public D2Item(String pFileName, D2BitReader pFile, long pCharLvl)
             throws Exception {
         iFileName = pFileName;
@@ -630,6 +638,24 @@ public class D2Item implements Comparable, D2ItemInterface {
         // untouched (Horadric Cube "box", Key to the Cairn Stones "bkd", Khalim's organs, etc.) all
         // carry a non-empty quest value and so are excluded. What these bits hold is still unknown.
         if (isReimaginedQuestItem() && usesPostV99ItemFormat()) {
+            pFile.skipBits(8);
+        }
+        // The CLASSIC quest items -- "type == ques" with a NON-empty misc.txt quest column, the
+        // complement of isReimaginedQuestItem()'s family and the ones that have always parsed
+        // untouched -- hit the dropped-padding-byte quirk instead of a fixed trailing field: the
+        // generic end-of-item rounding (getNextByteBoundaryInBits, "(pos + 7) & ~7") only advances
+        // when there are leftover bits, so a body that lands exactly on a byte boundary silently
+        // loses its padding byte, same as the simple potions and loose/socketed runes above. Found
+        // in a real character ("Zealer"): "A Jade Figurine" (j34, quest 19) ended byte-aligned here
+        // and read one byte short, so the next item started a byte early and failed to decode --
+        // every item after it, more than half the file, was lost. Chain-scanning its own bytes put
+        // the real next item ("MP3", then a run of real amulets, gloves and helms) exactly one byte
+        // later, confirming +8. Gated on alignment, which is what separates it from the classic
+        // quest items that need nothing: the Horadric Cube ("box", quest 10) in that same file ends
+        // mid-byte (offset 3) and is untouched. Kept separate from the blank-quest family above
+        // rather than folded into one "ques" rule, so their unconditional byte can never stack with
+        // this one. What this padding byte holds is still unknown.
+        if (isClassicQuestItem() && usesPostV99ItemFormat() && (pFile.get_pos() % 8) == 0) {
             pFile.skipBits(8);
         }
         // The Reimagined "grabber"/tool items (misc.txt type "grab": the eight gem Grabbers
