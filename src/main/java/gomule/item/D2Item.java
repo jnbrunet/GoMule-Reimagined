@@ -883,33 +883,40 @@ public class D2Item implements Comparable, D2ItemInterface {
             case 4: // magic item
             {
                 iMagical = true;
+                // Affix ids are 1-based: 0 means "no affix", and id N is the Nth data row, i.e.
+                // row index N-1. The automagic read above always knew this ("read(11) - 1"), but
+                // the magic/rare paths indexed the row directly, so every affix resolved to the
+                // row AFTER the real one. Names stayed plausible because affixes are grouped by
+                // item type and neighbouring rows often repeat a name for a different type, but
+                // the levelreq came from the wrong row: an "Ivory Jewel of Thunder" (prefix 156
+                // -> row 155 Ivory/jewl/56, suffix 85 -> row 84 of Thunder/jewl/49, so level 56
+                // in game) read as "Miocene/Enlightened" + "of Blight" and showed level 3. The
+                // old "suffix 0 -> row 10000" trick was papering over the same off-by-one: it
+                // forced an out-of-range row so the missing suffix read as blank.
                 short magic_prefix = (short) pFile.read(11);
                 short magic_suffix = (short) pFile.read(11);
 
-                if (magic_suffix == 0) {
-                    magic_suffix = 10000;
-                }
-
-                D2TxtFileItemProperties lPrefix = D2TxtFile.PREFIX
-                        .getRow(magic_prefix);
-                String lPreName = lPrefix.get("Name");
-                if (lPreName != null && !lPreName.equals("")) {
-                    iItemName = D2Files.getInstance().getTranslations().getTranslation(lPreName) + " " + iItemName;
-                    int lPreReq = getReq(lPrefix.get("levelreq"));
-                    if (lPreReq > iReqLvl) {
-                        iReqLvl = lPreReq;
+                if (magic_prefix > 0) {
+                    D2TxtFileItemProperties lPrefix = D2TxtFile.PREFIX.getRow(magic_prefix - 1);
+                    String lPreName = lPrefix.get("name");
+                    if (lPreName != null && !lPreName.equals("")) {
+                        iItemName = translateAffix(lPreName) + " " + iItemName;
+                        int lPreReq = getReq(lPrefix.get("levelreq"));
+                        if (lPreReq > iReqLvl) {
+                            iReqLvl = lPreReq;
+                        }
                     }
                 }
 
-                D2TxtFileItemProperties lSuffix = D2TxtFile.SUFFIX
-                        .getRow(magic_suffix);
-                String lSufName = lSuffix.get("Name");
-                if (lSufName != null && !lSufName.equals("")) {
-                    iItemName = iItemName + " "
-                            + D2Files.getInstance().getTranslations().getTranslation(lSufName);
-                    int lSufReq = getReq(lSuffix.get("levelreq"));
-                    if (lSufReq > iReqLvl) {
-                        iReqLvl = lSufReq;
+                if (magic_suffix > 0) {
+                    D2TxtFileItemProperties lSuffix = D2TxtFile.SUFFIX.getRow(magic_suffix - 1);
+                    String lSufName = lSuffix.get("name");
+                    if (lSufName != null && !lSufName.equals("")) {
+                        iItemName = iItemName + " " + translateAffix(lSufName);
+                        int lSufReq = getReq(lSuffix.get("levelreq"));
+                        if (lSufReq > iReqLvl) {
+                            iReqLvl = lSufReq;
+                        }
                     }
                 }
                 applyAutomodLvl();
@@ -961,11 +968,17 @@ public class D2Item implements Comparable, D2ItemInterface {
 
                 if (s.equals("") && !lUnique.get("invfile").equals("")) image_file = lUnique.get("invfile");
 
-                if (lUnique.get("code").equals(item_type)) {
-                    int lUniqueReq = getReq(lUnique.get("lvl req"));
-                    if (lUniqueReq != -1) {
-                        iReqLvl = lUniqueReq;
-                    }
+                // The unique row is resolved by the id stored in the save, and its "lvl req" is
+                // what the game itself shows -- the game never cross-checks the row's "code"
+                // against the item's own base code. Requiring them to match here meant an item
+                // whose base code drifted from its unique row silently fell back to the BASE
+                // item's levelreq (1 for a quiver), while the name still came from that same
+                // row. Reimagined re-pointed "Flames of Sanctuary" (unique id 1470) from Arrows
+                // to Bolts, so a stash holding an older arrows copy hit exactly that: name from
+                // the row, Required Level 1. Take the level from the same row the name came from.
+                int lUniqueReq = getReq(lUnique.get("lvl req"));
+                if (lUniqueReq != -1) {
+                    iReqLvl = lUniqueReq;
                 }
                 applyAutomodLvl();
                 break;
@@ -1000,10 +1013,11 @@ public class D2Item implements Comparable, D2ItemInterface {
             for (int i = 0; i < 3; i++) {
                 if (pFile.read(1) == 1) {
                     rare_prefixes[pre_count] = (short) pFile.read(11);
+                    // 1-based, exactly like the magic affixes above.
                     D2TxtFileItemProperties lPrefix = D2TxtFile.PREFIX
-                            .getRow(rare_prefixes[pre_count]);
+                            .getRow(rare_prefixes[pre_count] - 1);
                     pre_count++;
-                    String lPreName = lPrefix.get("Name");
+                    String lPreName = lPrefix.get("name");
                     if (lPreName != null && !lPreName.equals("")) {
                         int lPreReq = getReq(lPrefix.get("levelreq"));
                         if (lPreReq > iReqLvl) {
@@ -1015,9 +1029,9 @@ public class D2Item implements Comparable, D2ItemInterface {
                 if (pFile.read(1) == 1) {
                     rare_suffixes[suf_count] = (short) pFile.read(11);
                     D2TxtFileItemProperties lSuffix = D2TxtFile.SUFFIX
-                            .getRow(rare_suffixes[suf_count]);
+                            .getRow(rare_suffixes[suf_count] - 1);
                     suf_count++;
-                    String lSufName = lSuffix.get("Name");
+                    String lSufName = lSuffix.get("name");
                     if (lSufName != null && !lSufName.equals("")) {
                         int lSufReq = getReq(lSuffix.get("levelreq"));
                         if (lSufReq > iReqLvl) {
@@ -1094,13 +1108,36 @@ public class D2Item implements Comparable, D2ItemInterface {
     // belong to something else (this item's own trailing bits) and the list itself isn't here.
     private boolean isSetBonusListPresent(D2BitReader pFile) {
         int lSavedPos = pFile.get_pos();
-        int lCandidateId = (int) pFile.read(9);
-        pFile.set_pos(lSavedPos);
-        if (lCandidateId == 511) return true;
-        // getRow() never returns null (out-of-range rows come back as an empty-valued wrapper --
-        // see D2TxtFile.getValue()'s bounds check), so an invalid id surfaces as an empty
-        // "Save Bits" exactly like a real but non-storable stat row would.
-        return !D2TxtFile.ITEM_STAT_COST.getRow(lCandidateId).get("Save Bits").equals("");
+        try {
+            int lCandidateId = (int) pFile.read(9);
+            pFile.set_pos(lSavedPos);
+            if (lCandidateId == 511) return true;
+            // getRow() never returns null (out-of-range rows come back as an empty-valued wrapper
+            // -- see D2TxtFile.getValue()'s bounds check), so an invalid id surfaces as an empty
+            // "Save Bits" exactly like a real but non-storable stat row would.
+            if (D2TxtFile.ITEM_STAT_COST.getRow(lCandidateId).get("Save Bits").equals("")) {
+                return false;
+            }
+            // Checking only that opening id is not enough: it is 9 bits of whatever follows, and
+            // an absent list's first 9 bits land on a real storable stat often enough to matter.
+            // Found by trial-syncing ./d2111/setitems.txt to the currently installed Reimagined
+            // mod, which gives "Vampire's Crusade" rollable thresholds 1 and 3 that the existing
+            // pally3/pally5 fixtures (saved under the older table) store nothing for: the first
+            // of those absent lists opened on a perfectly valid stat id and only blew up several
+            // stats later, on one with no "Save Bits" at all -- the desync signature from
+            // CLAUDE.md. So trial-read the WHOLE list with the real decoder and accept it only if
+            // it reaches its own 511 terminator cleanly; anything else (an unstorable stat
+            // mid-list, running off the end of the buffer) means these bits belong to something
+            // else and the list is absent. That is what keeps those fixtures parsing when the
+            // table moves ahead of an already-saved file, which is this mod's normal state.
+            // The position is restored either way, so the caller re-reads from the same bit.
+            readPropertyList(pFile, new D2PropCollection(), 0);
+            return true;
+        } catch (Exception pEx) {
+            return false;
+        } finally {
+            pFile.set_pos(lSavedPos);
+        }
     }
 
     // The flag-29 trailing skill blob is 4 bits longer for an item that grants an "elemental skill"
@@ -1488,27 +1525,34 @@ public class D2Item implements Comparable, D2ItemInterface {
     }
 
     private void readProperties(D2BitReader pFile, int qFlag) {
+        readPropertyList(pFile, iProps, qFlag);
+    }
+
+    // Same read, but into a caller-supplied collection: isSetBonusListPresent() trial-reads a
+    // list into a throwaway one so its "is this list really here?" check runs the real decoder
+    // instead of a second, drifting copy of these bit widths.
+    private void readPropertyList(D2BitReader pFile, D2PropCollection pTarget, int qFlag) {
 
         int rootProp = (int) pFile.read(9);
 
         while (rootProp != 511) {
 
-            iProps.readProp(pFile, rootProp, qFlag);
+            pTarget.readProp(pFile, rootProp, qFlag);
 
             if (rootProp == 17) {
-                iProps.readProp(pFile, 18, qFlag);
+                pTarget.readProp(pFile, 18, qFlag);
             } else if (rootProp == 48) {
-                iProps.readProp(pFile, 49, qFlag);
+                pTarget.readProp(pFile, 49, qFlag);
             } else if (rootProp == 50) {
-                iProps.readProp(pFile, 51, qFlag);
+                pTarget.readProp(pFile, 51, qFlag);
             } else if (rootProp == 52) {
-                iProps.readProp(pFile, 53, qFlag);
+                pTarget.readProp(pFile, 53, qFlag);
             } else if (rootProp == 54) {
-                iProps.readProp(pFile, 55, qFlag);
-                iProps.readProp(pFile, 56, qFlag);
+                pTarget.readProp(pFile, 55, qFlag);
+                pTarget.readProp(pFile, 56, qFlag);
             } else if (rootProp == 57) {
-                iProps.readProp(pFile, 58, qFlag);
-                iProps.readProp(pFile, 59, qFlag);
+                pTarget.readProp(pFile, 58, qFlag);
+                pTarget.readProp(pFile, 59, qFlag);
             }
             rootProp = (int) pFile.read(9);
         }
@@ -1695,6 +1739,18 @@ public class D2Item implements Comparable, D2ItemInterface {
             return true;
         else
             return false;
+    }
+
+    /**
+     * magicprefix.txt / magicsuffix.txt key their affix by a lowercase "name" column (the
+     * Reimagined 3.0.10 data sync renamed magicsuffix's "Name" to "name"; magicprefix was
+     * already lowercase). Looking up "Name" silently returned "", so magic items lost both
+     * their affix names and the affixes' levelreq. An affix with no localized string falls
+     * back to its raw .txt name rather than aborting the whole item.
+     */
+    private static String translateAffix(String pAffixName) {
+        String lTranslated = D2Files.getInstance().getTranslations().getTranslationOrNull(pAffixName, "");
+        return lTranslated == null ? pAffixName : lTranslated;
     }
 
     private int getReq(String pReq) {
@@ -2168,14 +2224,10 @@ public class D2Item implements Comparable, D2ItemInterface {
         String retStr = "";
         for (int x = 0; x < rare_prefixes.length; x++) {
 
-            if (rare_prefixes[x] > 1) {
+            if (rare_prefixes[x] > 0) {
 
                 retStr = retStr
-                        + D2Files.getInstance()
-                                .getTranslations()
-                                .getTranslation(D2TxtFile.PREFIX
-                                        .getRow(rare_prefixes[x])
-                                        .get("Name"))
+                        + translateAffix(D2TxtFile.PREFIX.getRow(rare_prefixes[x] - 1).get("name"))
                         + " ";
             }
         }
@@ -2184,14 +2236,10 @@ public class D2Item implements Comparable, D2ItemInterface {
 
         for (int x = 0; x < rare_suffixes.length; x++) {
 
-            if (rare_suffixes[x] > 1) {
+            if (rare_suffixes[x] > 0) {
 
                 retStr = retStr
-                        + D2Files.getInstance()
-                                .getTranslations()
-                                .getTranslation(D2TxtFile.SUFFIX
-                                        .getRow(rare_suffixes[x])
-                                        .get("Name"))
+                        + translateAffix(D2TxtFile.SUFFIX.getRow(rare_suffixes[x] - 1).get("name"))
                         + " ";
             }
         }

@@ -59,6 +59,67 @@ public class D2StashTest {
         assertEquals("Oakheart", ((D2Item) clipboardStash.getItemList().get(0)).getItemName());
     }
 
+    // Two independent bugs made magic items show Required Level 1, both verified against this
+    // real Reimagined stash ("gomule.d2x"):
+    //   1. D2Item read the affix tables' name column as "Name", but magicprefix.txt and
+    //      magicsuffix.txt spell it "name" -- the lookup is case-sensitive, so it returned "".
+    //      Items lost their affix names AND the affixes' levelreq, leaving the base's own.
+    //   2. Affix ids are 1-based (0 = no affix), so id N is row N-1. Indexing the row directly
+    //      resolved every affix one row too far.
+    // The jewel below is the ground truth for both: in game it is "Ivory Jewel of Thunder",
+    // Required Level 56 -- prefix id 156 -> row 155 (Ivory, jewl, levelreq 56), suffix id 85 ->
+    // row 84 (of Thunder, jewl, levelreq 49). Before the fix it read as "Enlightened Jewel of
+    // Blight" (rows 156/85: Miocene on body armour, of Blight on weapons) with level 3.
+    @Test
+    public void magicItemsTakeTheirAffixNamesAndLevelRequirement() throws Exception {
+        D2TxtFile.constructTxtFiles("./d2111");
+
+        List<D2Item> items = loadStashFixture();
+
+        D2Item jewel = findByName(items, "Ivory Jewel", "of Thunder");
+        assertEquals(56, jewel.getReqLvl());
+        // A charm, for the same reason: Coral (lcha) + of Vitality (lcha), the higher wins.
+        assertEquals(61, findByName(items, "Coral Grand Charm", "of Vitality").getReqLvl());
+    }
+
+    // A unique's level comes from the row its id resolves to -- the row the displayed name also
+    // comes from -- and the game never cross-checks that row's "code" against the item's own base
+    // code. D2Item used to require a match, so an item whose base code had drifted from its unique
+    // row kept the row's name but fell back to the BASE item's levelreq, i.e. 1 for a quiver.
+    // Reimagined re-pointed "Flames of Sanctuary" (unique id 1470) from Arrows (aqv) to Bolts
+    // (cqv), and this stash holds both an older arrows copy and a current bolts copy: the arrows
+    // one is exactly the mismatch case, and both are Required Level 80 in the current data.
+    @Test
+    public void uniquesKeepTheirLevelEvenWhenTheirBaseCodeDriftedFromTheirRow() throws Exception {
+        D2TxtFile.constructTxtFiles("./d2111");
+
+        List<D2Item> items = loadStashFixture();
+
+        assertEquals(80, findByType(items, "Flames of Sanctuary", "cqv").getReqLvl());
+        assertEquals(80, findByType(items, "Flames of Sanctuary", "aqv").getReqLvl());
+    }
+
+    private List<D2Item> loadStashFixture() throws Exception {
+        String stashFile = new File(Resources.getResource("d2x/reimaginedCharms.d2x").toURI()).getAbsolutePath();
+        return new D2Stash(stashFile).getItemList();
+    }
+
+    // Item names carry D2R colour codes in the middle ("Ivory Jewel<c2>*<c3> of Thunder"), so
+    // match on the affixes at either end rather than on the whole string.
+    private D2Item findByName(List<D2Item> pItems, String pStart, String pEnd) {
+        return pItems.stream()
+                .filter(i -> i.getItemName().startsWith(pStart) && i.getItemName().endsWith(pEnd))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError(pStart + " ... " + pEnd + " not found"));
+    }
+
+    private D2Item findByType(List<D2Item> pItems, String pName, String pItemType) {
+        return pItems.stream()
+                .filter(i -> pName.equals(i.getItemName()) && pItemType.equals(i.getItem_type()))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError(pName + " (" + pItemType + ") not found"));
+    }
+
     // Builds the layout D2Stash.readAtmaItems() expects: "D2X" + numItems(16) + versionNr(16) +
     // checksum(32, computed with these same 4 bytes treated as zero) + item bytes from byte 11.
     private byte[] buildAtmaClipboardFile(byte[] itemBytes) {

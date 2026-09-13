@@ -63,8 +63,8 @@ public class D2GrailIndexTest {
             }
         }
 
-        assertEquals(1470, lUniques,
-                "total usable unique entries (1482 rows - 7 disabled - 5 blank-*ID section-header rows)");
+        assertEquals(1471, lUniques,
+                "total usable unique entries (1483 rows - 7 disabled - 5 blank-*ID section-header rows)");
         assertEquals(419, lUniquesChronicle, "unique entries with chronicle=true");
 
         assertEquals(455, lSets, "total usable set-item entries");

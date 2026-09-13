@@ -35,7 +35,7 @@ public class D2GrailModelTest {
         assertEquals(419, lModel.getTabProgress().getTotal(), "default scope is Chronicle-only");
 
         lModel.setIncludeNonChronicle(true);
-        assertEquals(1470, lModel.getTabProgress().getTotal(), "checked scope is the whole table");
+        assertEquals(1471, lModel.getTabProgress().getTotal(), "checked scope is the whole table");
 
         // The load-bearing assertion: toggling the checkbox must not have replaced (or touched)
         // the findings map -- see D2GrailModel.setIncludeNonChronicle's javadoc. Same reference,
