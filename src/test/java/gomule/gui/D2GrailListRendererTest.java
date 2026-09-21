@@ -7,6 +7,7 @@ import gomule.grail.D2GrailModel;
 import org.junit.jupiter.api.Test;
 import randall.d2files.D2TxtFile;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -321,6 +322,112 @@ public class D2GrailListRendererTest {
         assertTrue(lTooltip.contains("Adds 50 - 500 Lightning Damage"), lTooltip);
     }
 
+    /**
+     * A uniqueitems.txt "propN" column may name a row of propertygroups.txt -- a D2R-era table
+     * ./d2111 did not even carry -- instead of a properties.txt code, meaning "roll exactly one of
+     * these". propToStat finds no properties.txt row for such a code and returns nothing, so every
+     * one of them used to vanish from the tooltip silently.
+     * <p>
+     * "Renewed Flame Rift" (uniqueitems.txt index "Crafted Flame Rift") is the case this was
+     * reported on: six of its nine property slots are Incendiary-Affix1..6, and the tooltip showed
+     * nothing but its two fixed sunder lines ("Monster Fire Immunity is Sundered", "Fire Resist
+     * -70%") plus its charm weight. Each group's candidates come from the group row's own
+     * Prop1..Prop8 / ModMinN / ModMaxN columns, verified against d2111/propertygroups.txt:
+     * Affix1 = extra-fire 5-15 | pierce-fire 5-15 | fireskill 1, Affix2 = mag% 20-30 | gold% 40-60,
+     * Affix3 = hp 20-50 | mana 20-50 | ac 50-100, Affix4 = move1 10-20 | balance1 15-30 |
+     * all-stats 5-10, Affix6 = swing1 5-15 | cast1 5-15.
+     * <p>
+     * FIVE of the six slots show, not six: Incendiary-Affix5 (res-fire 70 | res-fire 35) is the one
+     * whose minN/maxN -- the pick COUNT for a group slot -- are both blank, so it rolls nothing and
+     * must not be listed at all. Confirmed against the game by the player: a Renewed Flame Rift
+     * never grants that fire resistance, which is what leaves its fixed "Fire Resist -70%" penalty
+     * standing. See rollsAtLeastOnce.
+     */
+    @Test
+    public void missingUniqueTooltipShowsEachPropertyGroupsCandidates() {
+        D2TxtFile.constructTxtFiles("./d2111");
+        D2GrailEntry lRenewedFlameRift = findByStrippedDisplayName("Renewed Flame Rift");
+        String lTooltip = D2GrailListRenderer.tooltipFor(rowOf(lRenewedFlameRift, null), null);
+
+        assertNotNull(lTooltip);
+        // The fixed properties it already showed, unchanged.
+        assertTrue(lTooltip.contains("Monster Fire Immunity is Sundered"), lTooltip);
+        assertTrue(lTooltip.contains("Fire Resist -70%"), lTooltip);
+        // One "One of:" heading per group slot that actually rolls -- five of the row's six.
+        assertEquals(5, countOccurrences(lTooltip, "One of:"),
+                "one heading per rolling propertygroups.txt slot on the row: " + lTooltip);
+        // Every candidate of every group, each with the group's own ModMin-ModMax range.
+        assertTrue(lTooltip.contains("+5-15% to Fire Skill Damage"), lTooltip);
+        assertTrue(lTooltip.contains("to Enemy Fire Resistance"), lTooltip);
+        assertTrue(lTooltip.contains("+1 to Fire Skills"), lTooltip);
+        assertTrue(lTooltip.contains("20-30% Better Chance of Getting Magic Items"), lTooltip);
+        assertTrue(lTooltip.contains("40-60% Extra Gold from Monsters"), lTooltip);
+        assertTrue(lTooltip.contains("+20-50 to Life"), lTooltip);
+        assertTrue(lTooltip.contains("+20-50 to Mana"), lTooltip);
+        assertTrue(lTooltip.contains("+50-100 Defense"), lTooltip);
+        assertTrue(lTooltip.contains("+10-20% Faster Run/Walk"), lTooltip);
+        assertTrue(lTooltip.contains("+15-30% Faster Hit Recovery"), lTooltip);
+        assertTrue(lTooltip.contains("All Stats +5-10"), lTooltip);
+        assertTrue(lTooltip.contains("+5-15% Increased Attack Speed"), lTooltip);
+        assertTrue(lTooltip.contains("+5-15% Faster Cast Rate"), lTooltip);
+        // Affix5 picks zero candidates (blank minN/maxN), so neither of its two res-fire
+        // alternatives may appear -- nor, obviously, the "105" they would have summed to had they
+        // been pooled into one collection instead of rendered one candidate at a time.
+        assertFalse(lTooltip.contains("Fire Resist +70%"), lTooltip);
+        assertFalse(lTooltip.contains("Fire Resist +35%"), lTooltip);
+        assertFalse(lTooltip.contains("105"), lTooltip);
+    }
+
+    /**
+     * The other shape a property group takes: "Wraithstep" (unique mirrored boots) references
+     * "skilltab-war", whose single candidate is "skilltab" with ParMin 21 / ParMax 23 -- a range of
+     * skill-tab IDS, not a value range, one of which the item grants. All three must be listed
+     * (the Warlock's Demon, Eldritch and Chaos tabs), each at the group's own ModMin/ModMax of 1.
+     * <p>
+     * "+1 to Fire Skills" on the Flame Rift above is the companion pin for a second bug this same
+     * case exposed: item_elemskillfire is named only in properties.txt's stat2 column, never a
+     * stat1, so D2Prop's descfunc-19 fallback could not find its tooltip row and read its value out
+     * of pVals' last slot -- which is propToStat's always-zeroed "par" -- printing "+0".
+     */
+    @Test
+    public void missingUniqueTooltipExpandsAPropertyGroupsParameterRange() {
+        D2TxtFile.constructTxtFiles("./d2111");
+        D2GrailEntry lWraithstep = findByStrippedDisplayName("Wraithstep");
+        String lTooltip = D2GrailListRenderer.tooltipFor(rowOf(lWraithstep, null), null);
+
+        assertNotNull(lTooltip);
+        assertEquals(1, countOccurrences(lTooltip, "One of:"), lTooltip);
+        assertTrue(lTooltip.contains("+1 to Demon Skills"), lTooltip);
+        assertTrue(lTooltip.contains("+1 to Eldritch Skills"), lTooltip);
+        assertTrue(lTooltip.contains("+1 to Chaos Skills"), lTooltip);
+        // Its own fixed properties are untouched by the group slot.
+        assertTrue(lTooltip.contains("+30% Faster Run/Walk"), lTooltip);
+        assertTrue(lTooltip.contains("+10-15 to Dexterity"), lTooltip);
+    }
+
+    /**
+     * Negative space: an ordinary unique names no property group at all, so no "One of:" heading
+     * may ever appear on one. Guards against propertyGroupMembers() mistaking a plain
+     * properties.txt code for a group.
+     */
+    @Test
+    public void anOrdinaryUniqueHasNoPropertyGroupSection() {
+        D2TxtFile.constructTxtFiles("./d2111");
+        String lTooltip = D2GrailListRenderer.tooltipFor(rowOf(findByDisplayName("Harlequin Crest"), null), null);
+
+        assertFalse(lTooltip.contains("One of:"), lTooltip);
+    }
+
+    private static int countOccurrences(String pText, String pNeedle) {
+        int lCount = 0;
+        int lAt = pText.indexOf(pNeedle);
+        while (lAt >= 0) {
+            lCount++;
+            lAt = pText.indexOf(pNeedle, lAt + pNeedle.length());
+        }
+        return lCount;
+    }
+
     private static D2GrailModel.Row rowOf(D2GrailEntry pEntry, Object pUnusedFinding) {
         // D2GrailModel.Row's constructor is package-private (gomule.grail); build one the same
         // way D2ViewGrail does, through a tiny one-entry model instead of reflection.
@@ -338,6 +445,20 @@ public class D2GrailListRendererTest {
     private static D2GrailEntry findByDisplayName(String pName) {
         for (D2GrailEntry lEntry : D2GrailIndex.getEntries()) {
             if (pName.equals(lEntry.getDisplayName())) {
+                return lEntry;
+            }
+        }
+        throw new AssertionError(pName + " not found in the index");
+    }
+
+    /**
+     * Same lookup as findByDisplayName, for the entries whose display name carries the raw "ÿc4"
+     * colour-code markup the translation tables store (every crafted sunder charm does).
+     */
+    private static D2GrailEntry findByStrippedDisplayName(String pName) {
+        for (D2GrailEntry lEntry : D2GrailIndex.getEntries()) {
+            String lName = lEntry.getDisplayName();
+            if (lName != null && pName.equals(gomule.item.D2ItemRenderer.stripColorCodes(lName))) {
                 return lEntry;
             }
         }

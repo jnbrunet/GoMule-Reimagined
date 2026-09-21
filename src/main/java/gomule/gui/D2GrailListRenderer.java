@@ -526,6 +526,7 @@ public class D2GrailListRenderer extends JLabel implements ListCellRenderer<Obje
         // meaning there either way) simply never belong in this accumulation.
         D2TxtFileItemProperties lRow = pEntry.getSourceRow();
         FlavouredProps lOwnProps = new FlavouredProps(new D2PropCollection(), new D2PropCollection());
+        List<List<PropSlot>> lGroups = new ArrayList<List<PropSlot>>();
         if (lRow != null) {
             int lMaxPropSlots = pEntry.getKey().getType() == D2GrailKey.Type.SET ? 9 : 12;
             List<PropSlot> lSlots = new ArrayList<PropSlot>();
@@ -535,7 +536,22 @@ public class D2GrailListRenderer extends JLabel implements ListCellRenderer<Obje
                 // one-letter trap here (par vs param) that is easy to get backwards.
                 addSlotIfPresent(lSlots, lRow, "prop" + i, "min" + i, "max" + i, "par" + i);
             }
-            lOwnProps = buildFlavouredProps(lSlots);
+            // A slot whose code names a propertygroups.txt row is NOT one of this item's own fixed
+            // properties -- it is a pool the item rolls exactly one entry out of -- so it leaves
+            // the fixed list here and is rendered separately, below, under its own "One of:"
+            // heading. See propertyGroupMembers, and rollsAtLeastOnce for the group slots that are
+            // listed on a row but never actually roll.
+            List<PropSlot> lFixedSlots = new ArrayList<PropSlot>();
+            for (int i = 0; i < lSlots.size(); i++) {
+                PropSlot lSlot = lSlots.get(i);
+                List<PropSlot> lMembers = propertyGroupMembers(lSlot.iCode);
+                if (lMembers == null) {
+                    lFixedSlots.add(lSlot);
+                } else if (!lMembers.isEmpty() && rollsAtLeastOnce(lSlot)) {
+                    lGroups.add(lMembers);
+                }
+            }
+            lOwnProps = buildFlavouredProps(lFixedSlots);
         }
 
         appendMissingBaseStats(lHtml, pEntry, lOwnProps);
@@ -550,6 +566,10 @@ public class D2GrailListRenderer extends JLabel implements ListCellRenderer<Obje
             // all, so both passes compute the identical applyOp() scaling and merge back to
             // themselves, exactly as before this change.
             lHtml.append(renderFlavouredProps(lOwnProps));
+        }
+
+        for (int i = 0; i < lGroups.size(); i++) {
+            appendPropertyGroup(lHtml, lGroups.get(i));
         }
 
         if (pEntry.getKey().getType() == D2GrailKey.Type.SET) {
@@ -1447,6 +1467,135 @@ public class D2GrailListRenderer extends JLabel implements ListCellRenderer<Obje
         }
         pInto.add(new PropSlot(lCode, nullToEmpty(pRow.get(pMinColumn)), nullToEmpty(pRow.get(pMaxColumn)),
                 pRow.get(pParamColumn)));
+    }
+
+    /**
+     * The candidate properties of a propertygroups.txt group, or null when pCode is not a group at
+     * all (the overwhelmingly common case -- an ordinary properties.txt code).
+     * <p>
+     * propertygroups.txt is a D2R-era table (see D2TxtFile.PROPERTY_GROUPS) that a uniqueitems.txt
+     * "propN" column may name instead of a properties.txt code. The item then rolls exactly ONE of
+     * the group's Prop1..Prop8 entries -- PickMode 1 and 2 are both "pick one" (2 weights the pick
+     * by the ChanceN columns, 1 does not), and the referencing row's own minN/maxN is the pick
+     * COUNT, either 1 or (blank) zero on the uniqueitems.txt slots that use a group -- never a
+     * value range. Each candidate's value range is the group's OWN ModMinN/ModMaxN, not the
+     * referencing row's columns, so those are what become the PropSlot's min/max here; the pick
+     * count itself is the caller's business (rollsAtLeastOnce).
+     * <p>
+     * properties.txt wins on a name clash: a code is only looked up as a group when properties.txt
+     * has no row for it, so no existing property can ever be re-routed through here by a future
+     * table sync that happens to add a colliding group name.
+     * <p>
+     * ParMinN/ParMaxN is a RANGE of parameter ids, not a min/max value pair, and it too is rolled:
+     * the only row in the mod's table where the two differ is "skilltab-war" (used by the unique
+     * boots "Wraithstep"), ParMin 21 / ParMax 23 -- the three Warlock skill tabs (Demon, Eldritch,
+     * Chaos), exactly one of which the item grants. Each id in that range is therefore its own
+     * candidate line. Every other row has the two columns equal (or blank), producing exactly one
+     * candidate per Prop slot as before.
+     */
+    private static List<PropSlot> propertyGroupMembers(String pCode) {
+        D2TxtFileItemProperties lGroupRow;
+        try {
+            if (D2TxtFile.PROPS.searchColumns("code", pCode) != null) {
+                return null;
+            }
+            lGroupRow = D2TxtFile.PROPERTY_GROUPS.searchColumns("code", pCode);
+        } catch (RuntimeException pEx) {
+            return null;
+        }
+        if (lGroupRow == null) {
+            return null;
+        }
+        List<PropSlot> lMembers = new ArrayList<PropSlot>();
+        for (int i = 1; i <= 8; i++) {
+            String lProp = nullToEmpty(lGroupRow.get("Prop" + i));
+            if (lProp.isEmpty()) {
+                continue;
+            }
+            String lMin = nullToEmpty(lGroupRow.get("ModMin" + i));
+            String lMax = nullToEmpty(lGroupRow.get("ModMax" + i));
+            List<String> lParams = parameterCandidates(nullToEmpty(lGroupRow.get("ParMin" + i)),
+                    nullToEmpty(lGroupRow.get("ParMax" + i)));
+            for (int p = 0; p < lParams.size(); p++) {
+                lMembers.add(new PropSlot(lProp, lMin, lMax, lParams.get(p)));
+            }
+        }
+        return lMembers;
+    }
+
+    /**
+     * Whether a slot that names a property group actually rolls anything. For a group slot the
+     * referencing row's minN/maxN columns are the pick COUNT, not a value range (see
+     * propertyGroupMembers), so a slot with nothing in either column picks zero of the group's
+     * candidates and the group is listed on the row without ever appearing on the item.
+     * <p>
+     * That is not a hypothetical: all six "Crafted" sunder charms carry their AffixN=5 group
+     * (res-fire/res-cold/res-ltng/res-pois/res-mag/red-dmg% at 70 or 35) with both columns blank,
+     * while their other five group slots all read 1/1. Confirmed against the game by the player:
+     * a Renewed Flame Rift never rolls the fire-resist bonus that group would grant -- which is
+     * also what keeps its fixed "Fire Resist -70%" penalty from being cancelled by its own affix.
+     */
+    private static boolean rollsAtLeastOnce(PropSlot pSlot) {
+        return parsedOrZero(pSlot.iMin) > 0 || parsedOrZero(pSlot.iMax) > 0;
+    }
+
+    private static int parsedOrZero(String pValue) {
+        try {
+            return Integer.parseInt(pValue.trim());
+        } catch (NumberFormatException pEx) {
+            return 0;
+        }
+    }
+
+    /**
+     * Every parameter id a group candidate can roll, from its ParMin/ParMax columns. Both blank, or
+     * both equal, or non-numeric (ParMin/ParMax hold a skill NAME on "roguesbow-affix1") is a
+     * single candidate; a numeric span (only "skilltab-war"'s 21..23) is one candidate per id.
+     * Bounded at 8 ids so a malformed or newly-synced row can never expand a tooltip without limit.
+     */
+    private static List<String> parameterCandidates(String pParMin, String pParMax) {
+        List<String> lOut = new ArrayList<String>();
+        try {
+            int lFrom = Integer.parseInt(pParMin.trim());
+            int lTo = Integer.parseInt(pParMax.trim());
+            if (lTo > lFrom && lTo - lFrom < 8) {
+                for (int i = lFrom; i <= lTo; i++) {
+                    lOut.add(String.valueOf(i));
+                }
+                return lOut;
+            }
+        } catch (NumberFormatException pEx) {
+            // Not a numeric id range -- fall through to the single-candidate case below.
+        }
+        lOut.add(pParMin.isEmpty() ? pParMax : pParMin);
+        return lOut;
+    }
+
+    /**
+     * One "roll exactly one of these" pool, as its own labelled section -- the same
+     * {@code <font color='red'>Label: </font>} + property-lines shape appendMissingSetBonuses uses
+     * for "Set (N items):".
+     * <p>
+     * Each candidate is rendered through its OWN one-slot collection rather than all of them
+     * through one shared collection, because D2PropCollection.tidy()'s combineProps() sums two
+     * qFlag-0 props that share a stat id -- and a group's candidates routinely DO share one: the
+     * three "skilltab" tab grants Wraithstep's skilltab-war expands into are all stat 188, and the
+     * six "*-Affix5" groups are the same resistance stat listed twice at two magnitudes ("res-fire
+     * 70" OR "res-fire 35"), which pooled would collapse into one invented "Fire Resist +105%"
+     * instead of the two alternatives the group offers. Alternatives are never additive here, so
+     * they must never share a collection, whatever the stat.
+     */
+    private static void appendPropertyGroup(StringBuilder pHtml, List<PropSlot> pMembers) {
+        StringBuilder lLines = new StringBuilder();
+        for (int i = 0; i < pMembers.size(); i++) {
+            List<PropSlot> lOne = new ArrayList<PropSlot>();
+            lOne.add(pMembers.get(i));
+            lLines.append(renderSlotsWithRanges(lOne));
+        }
+        if (lLines.length() == 0) {
+            return;
+        }
+        pHtml.append("<font color='red'>One of: </font>").append(lLines);
     }
 
     /**

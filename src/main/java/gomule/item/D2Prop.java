@@ -452,9 +452,28 @@ public class D2Prop {
                         // the displayed number in pVals[1] -- but some stats using this same
                         // descfunc (e.g. Reimagined's pl_maxdamage_percent/pl_mindamage_percent)
                         // carry only a single value, with nothing to put in pVals[1] at all.
-                        // pVals[pVals.length - 1] is the displayed value either way: index 1 for
-                        // the normal 2-value case, index 0 when there's only one value to show.
-                        return oString.replaceAll("%\\+d", "+" + Integer.toString(pVals[pVals.length - 1]));
+                        // pVals[pVals.length - 1] is the displayed value for both of those shapes:
+                        // index 1 for the normal 2-value case, index 0 when there's only one value.
+                        //
+                        // Both are shapes D2PropCollection.readProp() builds from a found item's
+                        // bitstream. A prop built from the TABLES instead (D2TxtFile.propToStat,
+                        // the Holy Grail's tooltip for an item nobody has found yet) is a third
+                        // shape -- {value, max, par} -- whose "par" slot propToStat always zeroes
+                        // before constructing the D2Prop, so its last element is a guaranteed 0 and
+                        // its displayed value is pVals[0]. Real case: "Renewed Flame Rift"
+                        // (uniqueitems.txt "Crafted Flame Rift") offers "fireskill" min=max=1 as
+                        // one Incendiary-Affix1 candidate; item_elemskillfire is named only in
+                        // properties.txt's stat2, never a stat1, so the lookup above finds nothing
+                        // and this branch rendered it "+0 to Fire Skills" instead of "+1".
+                        //
+                        // Length 3 is a safe discriminator inside this case: readProp's own 3- and
+                        // 4-value shapes (stat ids 195-201 and 204) are the chance-to-cast/charges
+                        // families, which render through descfunc 15/24, never here; and the
+                        // 3-value arrays deDupeProps builds for combined elemental damage carry a
+                        // funcN of 31..36 (modifyVals sets funcN, not the stat id), so they never
+                        // reach case 19 either.
+                        int lValue = pVals.length == 3 ? pVals[0] : pVals[pVals.length - 1];
+                        return oString.replaceAll("%\\+d", "+" + Integer.toString(lValue));
                     }
                 }
                 D2TxtFileItemProperties o = matchingPropsRecords.get(0);

@@ -52,6 +52,25 @@ public final class D2TxtFile {
     public static D2TxtFile SKILLS;
     public static D2TxtFile GEMS;
     public static D2TxtFile PROPS;
+    /**
+     * propertygroups.txt -- a D2R-era table with no Diablo II classic counterpart, which is why it
+     * was missing from ./d2111 and from this list entirely. A uniqueitems.txt (or magicprefix.txt)
+     * "propN" column may name a row of THIS table instead of a properties.txt code, in which case
+     * the item rolls exactly ONE of that group's Prop1..Prop8 entries; the referencing row's
+     * minN/maxN is then the pick COUNT (1, or blank for a group that is listed but never actually
+     * rolls), not a value range. Nothing in the item-parsing path needs it -- a found item stores whatever it actually
+     * rolled as plain stats in its own bitstream -- but the Holy Grail's tooltip for an item nobody
+     * has found yet has only the tables to go on, and used to drop every one of these codes
+     * silently (propToStat finds no properties.txt row for them and returns nothing).
+     * <p>
+     * The real case this was found on: "Renewed Flame Rift" (uniqueitems.txt index "Crafted Flame
+     * Rift") references Incendiary-Affix1..6 across prop3..prop8 and rendered nothing at all beyond
+     * its two fixed sunder properties. Eight uniqueitems.txt rows use groups in total (the six
+     * "Crafted" sunder charms, plus Wraithstep and Opalvein); setitems.txt, sets.txt, runes.txt,
+     * gems.txt and automagic.txt use none, which is why only the grail's unique tooltip path reads
+     * this table.
+     */
+    public static D2TxtFile PROPERTY_GROUPS;
     public static D2TxtFile HIRE;
     public static D2TxtFile FULLSET;
     public static D2TxtFile CHARSTATS;
@@ -96,6 +115,7 @@ public final class D2TxtFile {
         SKILLS = new D2TxtFile("skills");
         GEMS = new D2TxtFile("gems");
         PROPS = new D2TxtFile("properties");
+        PROPERTY_GROUPS = new D2TxtFile("propertygroups");
         MONSTATS = new D2TxtFile("monstats");
         TCS = new D2TxtFile("treasureclassex");
         LEVELS = new D2TxtFile("levels");
