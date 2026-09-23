@@ -18,6 +18,12 @@ tasks.withType(JavaCompile) {
 group 'org.example'
 version '1.0-SNAPSHOT'
 
+// Version stamped on the release archive. The CI release workflow passes the calculated
+// YYYY.MM.BB with `-PappVersion=...` (see .github/workflows/release.yml); a local
+// `gradlew distribution` with no override keeps the hand-maintained default below, so the
+// archive name does not change for anyone building by hand.
+ext.appVersion = project.findProperty('appVersion') ?: '3.0.10'
+
 repositories {
     mavenCentral()
 }
@@ -104,7 +110,7 @@ task createDistribution {
 task distribution(type: Zip) {
     from 'build/tmp/distribution/'
     include 'GoMule/**'
-    archiveName 'GoMule_Reimagined_3.0.10.zip'
+    archiveName "GoMule_Reimagined_${appVersion}.zip"
 }
 
 copyJarToDistribution.dependsOn jar

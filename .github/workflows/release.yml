@@ -1,0 +1,233 @@
+# Publishes a turn-key Windows build every time a commit lands on a YYYY.MM release branch.
+#
+# The version is YYYY.MM.BB: the branch name supplies YYYY.MM verbatim (so pushing to 2026.09 in
+# October still produces 2026.09.x -- the branch, not the calendar, is the authority), and BB is
+# derived by counting the tags already published for that month. That makes BB restart at 01 each
+# month and stay contiguous, unlike github.run_number which is global to the workflow and would
+# leave gaps whenever an unrelated run happens.
+name: Release
+
+on:
+  push:
+    # GitHub branch filters are globs, not regexes -- there is no \d, so the four-then-two digit
+    # shape has to be spelled out character class by character class. This matches 2026.09 and
+    # rejects main, feature branches and anything else.
+    branches:
+      - '[0-9][0-9][0-9][0-9].[0-9][0-9]'
+    # A 44 MB release for a typo fix in the docs helps nobody. Listed file by file rather than as
+    # '**/*.md' on purpose: CHANGELOG.md is release-relevant now, so a push that only touches it
+    # must still produce a release.
+    paths-ignore:
+      - 'README.md'
+      - 'CLAUDE.md'
+      - 'PLAN-*.md'
+      - '.idea/**'
+      - '.gitignore'
+
+permissions:
+  # The default GITHUB_TOKEN is read-only; creating the tag and the release needs write.
+  contents: write
+
+concurrency:
+  # Pushing five commits at once should produce one release for the tip, not five. Superseded runs
+  # are cancelled before they reach the publish step, so they never create a tag either.
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # BB is computed from the existing tags, and a shallow clone has none of them.
+          fetch-depth: 0
+
+      - name: Compute the YYYY.MM.BB version
+        id: version
+        shell: pwsh
+        run: |
+          $month = '${{ github.ref_name }}'
+          # actions/checkout fetches tags with fetch-depth: 0, but be explicit -- a tag deleted and
+          # recreated upstream would otherwise be stale here and hand out a duplicate BB.
+          git fetch --tags --force --quiet
+          $next = 1
+          foreach ($tag in (git tag --list "$month.*")) {
+            if ($tag -match "^$([regex]::Escape($month))\.(\d+)$") {
+              $n = [int]$Matches[1]
+              if ($n -ge $next) { $next = $n + 1 }
+            }
+          }
+          $version = '{0}.{1:d2}' -f $month, $next
+          Write-Host "Releasing $version"
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Extract the release notes from CHANGELOG.md
+        id: notes
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          # The last release, whichever branch produced it -- deliberately not `git describe`, which
+          # only sees tags reachable from HEAD. Work is merged with merge commits, so a tag created
+          # on 2026.09 is not an ancestor of a 2026.10 branch cut from main, and describe would miss
+          # it. Sorting every YYYY.MM.BB tag by version is topology-independent, and the scheme is
+          # monotonic, so the highest tag is the most recent release.
+          $previous = git tag --list --sort=-v:refname |
+            Where-Object { $_ -match '^\d{4}\.\d{2}\.\d+$' } |
+            Select-Object -First 1
+
+          # With no previous release at all, diffing against Git's empty tree returns the whole file
+          # as added, so the very first release runs through this same code path.
+          $base = if ($previous) { $previous } else { '4b825dc642cb6eb9a060e54bf8d69288fbee4904' }
+          Write-Host "Collecting CHANGELOG.md additions since $(if ($previous) { $previous } else { 'the beginning of the repository' })"
+
+          # A two-dot diff, on purpose: it answers "what does HEAD's changelog say that the last
+          # release's did not", which stays correct even when the tag is not an ancestor of HEAD.
+          # Context lines start with a space and removals with '-', so only genuine additions
+          # survive; '+++ b/CHANGELOG.md' is the single '+'-prefixed line that is not content.
+          $added = @(git diff $base HEAD -- CHANGELOG.md |
+            Where-Object { $_.StartsWith('+') -and -not $_.StartsWith('+++') } |
+            ForEach-Object { $_.Substring(1) })
+
+          # Drop HTML comment blocks so the maintainer instructions at the top of the file -- and
+          # any notes-to-self left alongside the entries -- never reach the release page.
+          $kept = @()
+          $inComment = $false
+          foreach ($line in $added) {
+            if ($inComment) { if ($line -match '-->') { $inComment = $false }; continue }
+            if ($line -match '<!--') { if ($line -notmatch '-->') { $inComment = $true }; continue }
+            $kept += $line
+          }
+
+          # On a first release the H1 title comes through as an addition; it heads the file, it is
+          # not a release note.
+          if ($kept.Count -and $kept[0] -match '^#\s') {
+            $kept = if ($kept.Count -gt 1) { $kept[1..($kept.Count - 1)] } else { @() }
+          }
+
+          $notes = ($kept -join "`n").Trim()
+          if ($notes) {
+            Set-Content -Path release-notes.md -Value $notes -Encoding utf8
+            Write-Host "---- release notes ----`n$notes`n-----------------------"
+            'curated=true' >> $env:GITHUB_OUTPUT
+          } else {
+            # Nothing new in the changelog. Rather than publish an empty release, fall back to the
+            # commit list GitHub generates by itself.
+            Write-Host 'No CHANGELOG.md additions found; falling back to auto-generated notes.'
+            'curated=false' >> $env:GITHUB_OUTPUT
+          }
+
+      # Two JDKs on purpose. jpackage only exists from JDK 14 on, but the Gradle wrapper is pinned
+      # to 7.1, which refuses to run on anything past JDK 16 -- and it cannot simply be upgraded,
+      # because build.gradle uses `archiveName`, removed in Gradle 8. So Gradle keeps its Java 11
+      # (the version CLAUDE.md documents for local builds) and jpackage gets its own modern JDK,
+      # reached through the step output below rather than $JAVA_HOME.
+      - name: Set up the JDK used for packaging
+        id: jdk-packaging
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      # Installed last so it is the one left in JAVA_HOME for the Gradle invocations.
+      - name: Set up the JDK used for building
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '11'
+          cache: gradle
+
+      - name: Build and test
+        shell: pwsh
+        run: .\gradlew.bat clean build --no-daemon --stacktrace
+
+      - name: Build the classic jar distribution
+        shell: pwsh
+        # The lightweight (~12 MB) zip for users who already have a JRE. appVersion replaces the
+        # version that used to be hard-coded in build.gradle's archiveName.
+        run: .\gradlew.bat distribution --no-daemon "-PappVersion=${{ steps.version.outputs.version }}"
+
+      - name: Package the self-contained Windows application
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          PACKAGING_JDK: ${{ steps.jdk-packaging.outputs.path }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          # jpackage takes a directory and bundles everything in it into the image's app/ folder.
+          # Only the jar belongs there; the game data has to end up elsewhere (see below).
+          New-Item -ItemType Directory -Force staging/input | Out-Null
+          Copy-Item (Get-ChildItem build/libs/*.jar | Select-Object -First 1) staging/input/GoMule.jar
+
+          # Without --add-modules, jpackage links essentially the whole JDK into the image -- jshell,
+          # javadoc, jfr and the rest -- for a 144 MB folder. This list is what GoMule actually
+          # touches: Swing and its dependencies, java.prefs for the settings, jdk.unsupported for
+          # Guava's sun.misc.Unsafe access, and java.sql because Jackson's date deserializers
+          # reference java.sql.Date. It brings the image down to 90 MB. Verified by launching the
+          # packaged exe and by loading every ./d2111 table on a runtime limited to exactly this set.
+          $modules = @(
+            'java.base', 'java.datatransfer', 'java.desktop', 'java.logging', 'java.management',
+            'java.naming', 'java.prefs', 'java.sql', 'java.xml', 'jdk.unsupported',
+            'jdk.unsupported.desktop', 'jdk.zipfs'
+          ) -join ','
+
+          $jpackageArgs = @(
+            '--type', 'app-image',
+            '--name', 'GoMule',
+            '--input', 'staging/input',
+            '--main-jar', 'GoMule.jar',
+            '--main-class', 'gomule.GoMule',
+            '--app-version', $env:VERSION,
+            '--vendor', 'GoMule-Reimagined',
+            '--description', 'Diablo II Resurrected item manager for the Reimagined mod',
+            '--copyright', 'GPL-2.0 -- see COPYING.txt',
+            '--add-modules', $modules,
+            '--dest', 'staging/image'
+          )
+          # Optional: drop a .ico here and the launcher stops using the generic Java icon.
+          if (Test-Path '.github/GoMule.ico') { $jpackageArgs += @('--icon', '.github/GoMule.ico') }
+
+          & (Join-Path $env:PACKAGING_JDK 'bin/jpackage.exe') @jpackageArgs
+          if ($LASTEXITCODE -ne 0) { throw "jpackage failed with exit code $LASTEXITCODE" }
+
+          # GoMule resolves d2111\, resources\, dupelists\, standard.dat and the projects\ folder it
+          # creates against the *process working directory*, not against the jar -- that is what
+          # GoMule.bat's `cd /d "%~dp0"` exists to guarantee. The jpackage launcher inherits the
+          # working directory from whoever started it, and Explorer sets that to the folder holding
+          # the double-clicked exe. So the data has to sit next to GoMule.exe, at the image root,
+          # rather than in app/ where --input would have put it.
+          $image = 'staging/image/GoMule'
+          Copy-Item -Recurse d2111, dupelists, resources $image
+          Copy-Item COPYING.txt, LICENSE.txt, standard.css, standard.dat $image
+
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Compress-Archive -Path $image -DestinationPath "dist/GoMule_Reimagined_${env:VERSION}_windows.zip"
+          Copy-Item build/distributions/*.zip dist/
+
+          Get-ChildItem dist | ForEach-Object { '{0}  {1:N0} MB' -f $_.Name, ($_.Length / 1MB) }
+
+      - name: Publish the release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          CURATED_NOTES: ${{ steps.notes.outputs.curated }}
+        # Creating the release also creates the tag, so a run cancelled before this point leaves
+        # nothing behind and the next push simply reuses the same BB.
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $assets = Get-ChildItem dist/*.zip | ForEach-Object { $_.FullName }
+
+          # --notes-file and --generate-notes are mutually exclusive, so pick one: the curated
+          # changelog entries when there are any, the generated commit list otherwise.
+          $notesArgs = if ($env:CURATED_NOTES -eq 'true') { @('--notes-file', 'release-notes.md') }
+                       else { @('--generate-notes') }
+
+          gh release create $env:VERSION @assets `
+            --title $env:VERSION `
+            --target '${{ github.sha }}' `
+            @notesArgs
+          if ($LASTEXITCODE -ne 0) { throw "gh release create failed with exit code $LASTEXITCODE" }

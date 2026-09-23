@@ -9,17 +9,41 @@ Get D2R Reimagined here: https://www.nexusmods.com/diablo2resurrected/mods/503
 
 ## Download
 
-Go to the release page: https://github.com/Cjreek/GoMule-Reimagined/releases
+Go to the release page: https://github.com/jnbrunet/GoMule-Reimagined/releases
 
-### Direct download links
+Releases are named `YYYY.MM.BB` — year, month, and the build number within that month — and each
+one ships two archives:
+
+| Archive | Size | Java required? |
+|---|---|---|
+| `GoMule_Reimagined_<version>_windows.zip` | ~44 MB | **No** — a Java runtime is bundled |
+| `GoMule_Reimagined_<version>.zip` | ~11 MB | Yes — needs a JRE already installed |
+
+### Older releases from the upstream fork
 ⮕ [2.1.2](https://github.com/Cjreek/GoMule-Reimagined/releases/download/gomule_reimagined_212/GoMule_Reimagined_2.1.2.zip)  
 ⮕ [2.1.1](https://github.com/Cjreek/GoMule-Reimagined/releases/download/gomule_reimagined_211/GoMule_Reimagined_2.1.1.zip)  
 
 ## Installation
 
-0) You need to have the Java runtime installed on your PC!
+Using `GoMule_Reimagined_<version>_windows.zip` (recommended, nothing else to install):
+
+1) Extract the .zip anywhere you have write access — your Desktop or Documents is fine.
+   Avoid `C:\Program Files`: GoMule creates its `projects\` folder next to the executable and
+   cannot write there.
+2) Double-click `GoMule.exe` inside the extracted `GoMule` folder.
+3) Done.
+
+Windows will show a "Windows protected your PC" SmartScreen warning the first time, because the
+executable is not signed with a paid code-signing certificate. Click *More info* → *Run anyway*.
+
+Note that `GoMule.exe` finds its data files (`d2111\`, `resources\`, …) relative to the folder it is
+started from, so launch it from its own folder rather than from a shortcut with a different
+"Start in" directory.
+
+Using `GoMule_Reimagined_<version>.zip` (smaller, but you need a Java runtime installed):
+
 1) Extract the contents of the .zip file.
-2) Done
+2) Run `GoMule.bat`.
 
 ## Restrictions & Known Bugs
 
@@ -73,13 +97,37 @@ Generally no actual code changes are necessary. Some files from the mod need to 
     - treasureclassex.txt
     - uniqueitems.txt
     - weapons.txt
-4) Open `build.gradle` and change the `archiveName` in the distribution task to match the version you want to build GoMule for:
-```gradle
-task distribution(type: Zip) {
-    from 'build/tmp/distribution/'
-    include 'GoMule/**'
-    archiveName 'GoMule_Reimagined_2.1.2.zip'
-}
+4) Execute the `distribution` gradle task. Pass the version you are building for with
+   `-PappVersion=...` to name the archive (it defaults to the `appVersion` in `build.gradle`):
 ```
-5) Execute the `distribution` gradle task.
-6) An updated version of GoMule should be generated and placed in `build/distributions/`
+gradlew distribution -PappVersion=2.1.2
+```
+5) An updated version of GoMule should be generated and placed in `build/distributions/`
+
+## Releasing
+
+Pushing a commit to a branch named `YYYY.MM` (e.g. `2026.09`) triggers
+[`.github/workflows/release.yml`](.github/workflows/release.yml), which builds, runs the test
+suite, packages the self-contained Windows application with `jpackage`, and publishes a
+`YYYY.MM.BB` release. `BB` is derived from the tags already published for that month, so it
+restarts at `01` every month. Pushing several commits at once produces a single release for the
+tip of the branch.
+
+### Release notes
+
+Add an entry to [`CHANGELOG.md`](CHANGELOG.md) as you go and commit it to `main` like any other
+change. When you merge `main` into the release branch, the workflow diffs `CHANGELOG.md` against
+the last published release and uses the lines you added as the release notes. There is nothing to
+rename or reset afterwards, and the workflow never commits to the repository.
+
+- The per-version history lives on the releases page; `CHANGELOG.md` is only the staging area for
+  the next release.
+- Text inside `<!-- HTML comments -->` is stripped, so notes-to-self are safe in that file.
+- Only *added* lines are picked up, so editing an existing entry republishes it in the next
+  release.
+- If you added nothing, the release falls back to GitHub's auto-generated commit list rather than
+  shipping empty notes.
+
+The last release is found by version-sorting the `YYYY.MM.BB` tags rather than with
+`git describe`, because merge commits mean a tag on `2026.09` is not an ancestor of a `2026.10`
+branch cut from `main`.
