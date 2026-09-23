@@ -42,6 +42,27 @@ test {
     systemProperty 'java.awt.headless', 'true'
 }
 
+// Launches the app straight from the compiled classes, the way an IDE's run configuration does --
+// no fat jar to repackage first (that is the `jar` task below, ~12 MB of re-zipped dependencies on
+// every change). Run it with `gradlew run`.
+//
+// A plain JavaExec task rather than the `application` plugin on purpose: `application` would also
+// wire distZip/distTar into `assemble`, so every `gradlew build` would start producing a second,
+// differently-named distribution archive alongside the hand-rolled `distribution` task below.
+//
+// workingDir is the load-bearing part. GoMule resolves ./d2111, ./resources, ./projects and
+// ./standard.dat relative to the process's working directory, which Gradle otherwise sets to the
+// project directory only by coincidence of that being the same folder here -- it is stated
+// explicitly so the task cannot break if this build is ever included from elsewhere. The same
+// requirement is why the shipped GoMule.bat opens with `cd /d "%~dp0"`.
+task run(type: JavaExec) {
+    group = 'application'
+    description = 'Runs GoMule from the compiled classes, with the repository root as working directory.'
+    mainClass = 'gomule.GoMule'
+    classpath = sourceSets.main.runtimeClasspath
+    workingDir = rootDir
+}
+
 jar {
     manifest {
         attributes(
