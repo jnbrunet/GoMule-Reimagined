@@ -268,12 +268,18 @@ public class D2ViewStash extends JInternalFrame implements D2ItemContainer, D2It
         iItemText.setBackground(bgColor);
 
         JScrollPane lItemScroll = new JScrollPane(iItemText);
+        // No border and a black viewport: the scroll pane's default bevel would draw a line right
+        // between the sprite and the name, which is exactly the separation we do not want here.
+        lItemScroll.setBorder(BorderFactory.createEmptyBorder());
+        lItemScroll.getViewport().setBackground(bgColor);
+        lItemPanel.setBackground(bgColor);
         lItemPanel.setLayout(new BorderLayout());
         lItemPanel.add(lItemScroll, BorderLayout.CENTER);
-        // The item sprite goes in a fixed-height band under the properties: CENTER keeps giving all
-        // the stretchable space to the text, SOUTH only ever gets the panel's preferred height.
+        // The item sprite goes in a fixed-height band above the name and properties: CENTER keeps
+        // giving all the stretchable space to the text, NORTH only ever gets the panel's preferred
+        // height. Same black background on both, so the two read as one continuous detail pane.
         iItemImage = new D2ItemImagePanel();
-        lItemPanel.add(iItemImage, BorderLayout.SOUTH);
+        lItemPanel.add(iItemImage, BorderLayout.NORTH);
         lItemPanel.setPreferredSize(new Dimension(250, 100));
 
 //        iContentPane.add(lItemPanel, BorderLayout.CENTER);
