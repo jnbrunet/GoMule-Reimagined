@@ -33,6 +33,12 @@ dependencies {
     implementation 'com.formdev:flatlaf:1.6'
     implementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.13.+")
     testImplementation "org.mockito:mockito-core:3.+"
+    // ApplicationRunningCheckerTest mocks java.lang.Runtime, which is final: the default
+    // subclassing mock maker cannot do that, and both tests in that class died with
+    // "Cannot mock/spy class java.lang.Runtime ... final class". mockito-inline swaps in the
+    // instrumentation-based mock maker, which can. It is a separate artifact only in the 3.x
+    // line (it became the default in Mockito 5) -- keep the two versions in step if either moves.
+    testImplementation "org.mockito:mockito-inline:3.+"
     testImplementation "org.junit.jupiter:junit-jupiter:5.5.2"
 }
 

@@ -127,6 +127,12 @@ public class D2FileManager extends JFrame {
     private JButton iFlavieButton;
     private JButton iProjTextDumpButton;
 
+    // The "Project Control" box holding those four buttons. With no project open they are not
+    // merely unusable but meaningless -- there is no project to delete, clear or report on -- so
+    // the whole box is hidden rather than greyed out, leaving the empty state showing only what
+    // can actually be acted on.
+    private RandallPanel iProjControlPanel;
+
     // File-menu items whose enabled state depends on a project being open (plan section 5, step
     // 2) -- likewise promoted to fields for the same reason. "New Project..."/"Open Project..."
     // are deliberately NOT among these: they must stay clickable with no project open, since they
@@ -279,14 +285,26 @@ public class D2FileManager extends JFrame {
      * uses the full path for.
      */
     private void checkProjectsModel() {
-        D2ProjectRegistry.purgeMissing(iProperties);
-        iProjectModel.removeAllElements();
-        for (File lDir : D2ProjectRegistry.getRecentProjects(iProperties)) {
-            iProjectModel.addElement(lDir.getAbsoluteFile());
-        }
-        if (iProject != null
-                && iProjectModel.getIndexOf(iProject.getProjectDirFile().getAbsoluteFile()) == -1) {
-            iProjectModel.addElement(iProject.getProjectDirFile().getAbsoluteFile());
+        // The whole rebuild runs under iIgnoreProjectSelection, and that is load-bearing, not
+        // belt-and-braces: DefaultComboBoxModel.addElement() SELECTS the element it adds when the
+        // model was empty and nothing was selected, firing a SELECTED ItemEvent. Unguarded, the
+        // very first addElement() below therefore looked to the combo's listener like the user
+        // picking a project -- so "Close Project", which calls this right after clearing the
+        // project, immediately re-opened one behind the user's back: the tree stayed full of the
+        // supposedly closed project's characters and stashes while the combo showed blank.
+        iIgnoreProjectSelection = true;
+        try {
+            D2ProjectRegistry.purgeMissing(iProperties);
+            iProjectModel.removeAllElements();
+            for (File lDir : D2ProjectRegistry.getRecentProjects(iProperties)) {
+                iProjectModel.addElement(lDir.getAbsoluteFile());
+            }
+            if (iProject != null
+                    && iProjectModel.getIndexOf(iProject.getProjectDirFile().getAbsoluteFile()) == -1) {
+                iProjectModel.addElement(iProject.getProjectDirFile().getAbsoluteFile());
+            }
+        } finally {
+            iIgnoreProjectSelection = false;
         }
     }
 
@@ -355,6 +373,7 @@ public class D2FileManager extends JFrame {
         });
 
         RandallPanel projControl = new RandallPanel();
+        iProjControlPanel = projControl;
         projControl.setPreferredSize(new Dimension(190, 150));
         projControl.setBorder(new TitledBorder(
                 null, ("Project Control"), TitledBorder.LEFT, TitledBorder.TOP, iLeftPane.getFont(), Color.gray));
@@ -1056,25 +1075,30 @@ public class D2FileManager extends JFrame {
         if (iChangeProject != null) {
             iChangeProject.setEnabled(lHasProject);
         }
-        if (iDelProjButton != null) {
-            iDelProjButton.setEnabled(lHasProject);
-            iClProjButton.setEnabled(lHasProject);
-            iFlavieButton.setEnabled(lHasProject);
-            iProjTextDumpButton.setEnabled(lHasProject);
+        // Hidden, not disabled -- see iProjControlPanel's own comment. revalidate()/repaint() on
+        // the containing pane is required: hiding a component does not by itself re-run the
+        // layout, so the space it occupied would otherwise stay blank instead of closing up.
+        if (iProjControlPanel != null) {
+            iProjControlPanel.setVisible(lHasProject);
+            if (iLeftPane != null) {
+                iLeftPane.revalidate();
+                iLeftPane.repaint();
+            }
         }
     }
 
     /**
      * A defensive-copy list of every open file that currently has unsaved edits (plan section 3,
-     * step 1) -- iItemLists' isModified() lists plus the clipboard's own (labelled "Clipboard"
-     * rather than its real Clipboard.d2x path, which is an implementation detail the user never
-     * chose). What confirmCloseProject()'s dialog below shows.
+     * step 1) -- what confirmCloseProject()'s dialog below shows.
+     * <p>
+     * The clipboard is deliberately NOT in this list, even though it is a real .d2x that can be
+     * modified. It is the project's own scratch space, not a file the user opened and chose to
+     * edit: being asked whether to save "Clipboard" means nothing to them, and answering No would
+     * silently drop items they had parked there. confirmCloseProject() just saves it, the same way
+     * it saves the project's settings.
      */
     public List<String> getModifiedFileNames() {
         List<String> lResult = new ArrayList<String>();
-        if (iClipboard != null && iClipboard.isModified()) {
-            lResult.add("Clipboard");
-        }
         Iterator lIterator = iItemLists.keySet().iterator();
         while (lIterator.hasNext()) {
             String lFileName = (String) lIterator.next();
@@ -1099,13 +1123,20 @@ public class D2FileManager extends JFrame {
      * its action entirely rather than close/switch anything.
      */
     public boolean confirmCloseProject() {
-        // The project's own settings (file list, bank, Flavie preferences) are not "a file the
-        // user edited" -- losing them would silently degrade the app's own state rather than
-        // discard something the user chose to type -- so they are written regardless of the
-        // Yes/No/Cancel choice below, the one piece of the old unconditional closeWindows()
-        // saveAll() that is deliberately kept unconditional.
+        // The project's own settings (file list, bank, Flavie preferences) and its clipboard are
+        // not "files the user edited" -- losing them would silently degrade the app's own state
+        // rather than discard something the user chose to type -- so both are written regardless
+        // of the Yes/No/Cancel choice below, the piece of the old unconditional closeWindows()
+        // saveAll() that is deliberately kept unconditional. See getModifiedFileNames() for why
+        // the clipboard is never offered as a choice.
         if (iProject != null) {
             iProject.saveProject();
+            if (iClipboard != null) {
+                // Null only if createRightPane() failed to build the clipboard at startup, which
+                // it handles by replacing the whole content pane with the error -- not a state
+                // worth crashing this save path over.
+                iClipboard.saveView();
+            }
         }
 
         List<String> lModified = getModifiedFileNames();
