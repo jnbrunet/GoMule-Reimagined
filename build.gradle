@@ -108,9 +108,14 @@ task copyResourcesToDistribution(type: Copy) {
     into "build/tmp/distribution/GoMule/"
 }
 
+// Wipes and recreates the staging folder the two copy tasks fill. delete/mkdir go in doFirst, not
+// in the configuration block: at configuration time they run on *every* invocation -- including
+// `gradlew clean`, and including before clean itself -- rather than when this task actually runs.
 task createDistribution {
-    delete "build/tmp/distribution"
-    mkdir "build/tmp/distribution/GoMule"
+    doFirst {
+        delete "build/tmp/distribution"
+        mkdir "build/tmp/distribution/GoMule"
+    }
 }
 
 task distribution(type: Zip) {
@@ -121,6 +126,15 @@ task distribution(type: Zip) {
 
 copyJarToDistribution.dependsOn jar
 copyJarToDistribution.dependsOn test
-distribution.dependsOn createDistribution
-createDistribution.finalizedBy copyJarToDistribution
-createDistribution.finalizedBy copyResourcesToDistribution
+copyJarToDistribution.dependsOn createDistribution
+copyResourcesToDistribution.dependsOn createDistribution
+
+// dependsOn, not `createDistribution.finalizedBy <copy task>`: a finalizer is only ordered after
+// the task it finalizes, never before `distribution`, which depended on createDistribution alone.
+// Gradle was therefore free to run the Zip before the copies had filled the staging folder, and
+// did -- one `gradlew distribution` produced an 11 MB archive holding GoMule.jar and nothing else,
+// no resources/ and no d2111/, while the next produced the correct 18 MB one. Whether it bites
+// depends on scheduling (it showed up when `test` still had work to do), so the archive has to be
+// wired as a real dependency rather than left to chance.
+distribution.dependsOn copyJarToDistribution
+distribution.dependsOn copyResourcesToDistribution

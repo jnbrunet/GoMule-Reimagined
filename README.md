@@ -124,12 +124,25 @@ gradlew distribution -PappVersion=2.1.2
 
 ## Releasing
 
-Pushing a commit to a branch named `YYYY.MM` (e.g. `2026.09`) triggers
+Pushing to a branch named `YYYY.MM` (e.g. `2026.09`) triggers
 [`.github/workflows/release.yml`](.github/workflows/release.yml), which builds, runs the test
 suite, packages the self-contained Windows application with `jpackage`, and publishes a
 `YYYY.MM.BB` release. `BB` is derived from the tags already published for that month, so it
 restarts at `01` every month. Pushing several commits at once produces a single release for the
 tip of the branch.
+
+Creating the branch counts as a push, so `git push -u origin 2026.10` on a fresh release branch is
+enough to cut the month's first release. A release can also be cut or re-cut by hand from the
+Actions tab, or with:
+
+```
+gh workflow run Release --ref 2026.09
+```
+
+The trigger has no `paths`/`paths-ignore` filter on purpose. GitHub evaluates those against the
+files a push changed, and "if there are no files changed, the workflow will not run" -- which is
+exactly what creating a release branch from the tip of `main` looks like. Such a filter silently
+swallowed the first release of every month, without even leaving a skipped run behind.
 
 ### Release notes
 

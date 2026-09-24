@@ -14,15 +14,18 @@ on:
     # rejects main, feature branches and anything else.
     branches:
       - '[0-9][0-9][0-9][0-9].[0-9][0-9]'
-    # A 44 MB release for a typo fix in the docs helps nobody. Listed file by file rather than as
-    # '**/*.md' on purpose: CHANGELOG.md is release-relevant now, so a push that only touches it
-    # must still produce a release.
-    paths-ignore:
-      - 'README.md'
-      - 'CLAUDE.md'
-      - 'PLAN-*.md'
-      - '.idea/**'
-      - '.gitignore'
+    # Deliberately no paths/paths-ignore filter. GitHub evaluates those against the files the push
+    # changed and, per its docs, "if there are no files changed, the workflow will not run" -- and
+    # creating a release branch from the tip of main is exactly a push that changes nothing. A
+    # paths-ignore filter here therefore swallowed the first release of every month, silently, with
+    # not even a skipped run to show for it. Pushing to a YYYY.MM branch means "release this", so
+    # the trigger is left unconditional; `concurrency` below is what keeps a multi-commit push from
+    # producing a pile of releases.
+
+  # Lets a release be cut or re-cut by hand from the Actions tab, or with
+  # `gh workflow run Release --ref 2026.09`. github.ref_name is the branch dispatched from, so the
+  # version is computed exactly as it is for a push.
+  workflow_dispatch:
 
 permissions:
   # The default GITHUB_TOKEN is read-only; creating the tag and the release needs write.
