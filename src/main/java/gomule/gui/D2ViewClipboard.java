@@ -195,6 +195,10 @@ public class D2ViewClipboard extends RandallPanel implements D2ItemContainer, D2
     }
 
     public void setProject(D2Project pProject) throws Exception {
+        if (pProject == null) {
+            clearProject();
+            return;
+        }
         if (iStash != null) {
             iStash.removeD2ItemListListener(this);
             iStash = null;
@@ -217,6 +221,34 @@ public class D2ViewClipboard extends RandallPanel implements D2ItemContainer, D2
         if (iItemModel != null) {
             itemListChanged();
         }
+    }
+
+    /**
+     * "No project" (plan section 5, step 1): detaches the D2Stash backing the clipboard entirely,
+     * rather than leaving it pointed at a Clipboard.d2x under a project directory that is no
+     * longer the current one. Called from {@code setProject(null)} above -- both from
+     * D2FileManager.setProject(null) (an explicit Close Project) and, once, from the constructor
+     * itself when GoMule starts up with no project remembered at all (D2FileManager's
+     * constructor still unconditionally builds this panel). {@code saveView()} and the static
+     * accessors below (getInstance(), getItemList(), ...) are the only other places {@code
+     * iStash}/{@code iItems} are touched, and every one of them is either already null-safe
+     * ({@code saveView()}) or, per the invariant on D2FileManager.setProject(null), unreachable
+     * with no project open (no windows means nothing calls moveToClipboard()/addItem()/etc.).
+     */
+    public void clearProject() {
+        if (iStash != null) {
+            iStash.removeD2ItemListListener(this);
+            iStash = null;
+        }
+        iFileName = null;
+        iItems = new ArrayList();
+        if (iItemModel != null) {
+            iItemModel.setItems(iItems);
+            iItemModel.fireTableChanged();
+            iTable.clearSelection();
+            iTable.repaint();
+        }
+        iBank.setText("");
     }
 
     public boolean isModified() {

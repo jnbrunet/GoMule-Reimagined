@@ -28,6 +28,8 @@ import gomule.d2x.D2Stash;
 import gomule.gui.sharedStash.D2ViewSharedStash;
 import gomule.item.D2Item;
 import gomule.util.D2Project;
+import gomule.util.D2ProjectRegistry;
+import gomule.util.D2UserData;
 import randall.d2files.D2TxtFile;
 import randall.flavie.Flavie;
 import randall.util.RandallPanel;
@@ -37,6 +39,7 @@ import javax.swing.border.TitledBorder;
 import javax.swing.event.HyperlinkEvent;
 import javax.swing.event.InternalFrameEvent;
 import javax.swing.event.InternalFrameListener;
+import javax.swing.filechooser.FileFilter;
 import java.awt.*;
 import java.awt.event.*;
 import java.beans.PropertyVetoException;
@@ -116,6 +119,37 @@ public class D2FileManager extends JFrame {
 
     private JButton flavieSingle;
 
+    // Project-control widgets kept as fields (rather than createLeftPane() locals, as before) so
+    // updateProjectDependentUI() can enable/disable them from outside that method -- plan section
+    // 5, step 2.
+    private JButton iDelProjButton;
+    private JButton iClProjButton;
+    private JButton iFlavieButton;
+    private JButton iProjTextDumpButton;
+
+    // File-menu items whose enabled state depends on a project being open (plan section 5, step
+    // 2) -- likewise promoted to fields for the same reason. "New Project..."/"Open Project..."
+    // are deliberately NOT among these: they must stay clickable with no project open, since they
+    // are the only way to ever get one.
+    private JMenuItem iMenuItemCloseProject;
+    private JMenuItem iMenuItemOpenChar;
+    private JMenuItem iMenuItemNewStash;
+    private JMenuItem iMenuItemOpenStash;
+    private JMenuItem iMenuItemSaveAll;
+    private JMenuItem iMenuItemOpenGrail;
+    private JMenu iProjMenu;
+
+    // Set while the combo box's own selection is being reset programmatically (a Cancel from
+    // confirmCloseProject(), or a plain model rebuild) so its ItemListener below can tell that
+    // apart from a real user pick -- without this flag, restoring the previous selection after a
+    // Cancel would itself fire itemStateChanged() and recurse into confirmCloseProject() again
+    // (plan section 6, "Cancel qui ne annule pas").
+    private boolean iIgnoreProjectSelection = false;
+
+    // Reused by "New Project..."'s validation (plan section 5, step 4) -- the exact same
+    // characters the old left-pane "New Proj" button used to reject.
+    private static final Pattern PROJECT_NAME_PATTERN = Pattern.compile("[^/?*:;{}\\\\]+", Pattern.UNIX_LINES);
+
     private D2FileManager() {
         D2TxtFile.constructTxtFiles("d2111");
         sharedStashReader = new D2SharedStashReader();
@@ -146,6 +180,11 @@ public class D2FileManager extends JFrame {
                 parseInt(iProperties.getProperty("win-width", "1024")),
                 parseInt(iProperties.getProperty("win-height", "768"))));
         setTitle(true);
+        // Every widget this touches (menu items, iToolbar's buttons, the left-pane project
+        // controls) now exists -- this is the first point in the constructor where it's safe to
+        // call, and it's what puts the app into the right state for whatever checkProjects()
+        // decided above (a project open, or none at all after a previous explicit Close).
+        updateProjectDependentUI();
         setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
         this.getGlassPane().setVisible(false);
         addWindowListener(new java.awt.event.WindowAdapter() {
@@ -170,7 +209,11 @@ public class D2FileManager extends JFrame {
     }
 
     private void setTitle(boolean saved) {
-        setTitle("GoMule " + CURRENT_VERSION + (saved ? " - Saved" : ""));
+        // The project name (or its absence) is the main visual feedback for the new "no project
+        // open" state (plan section 5, step 4) -- there is otherwise nothing else on screen that
+        // says so at a glance once the tree and clipboard are both empty.
+        String lProjectLabel = (iProject != null) ? iProject.getProjectName() : "(no project)";
+        setTitle("GoMule " + CURRENT_VERSION + " [" + lProjectLabel + "]" + (saved ? " - Saved" : ""));
     }
 
     public static D2FileManager getInstance() {
@@ -227,18 +270,23 @@ public class D2FileManager extends JFrame {
         lDialog.setVisible(true);
     }
 
+    /**
+     * Rebuilds the combo box's model from the persisted recent-projects registry (plan section
+     * 4) -- no longer a directory listing of {@code projects/}, now that a project can live
+     * anywhere on disk. Elements are the project directories themselves (a File, not a bare
+     * name): two projects that happen to share a folder name in two different locations must
+     * stay distinguishable, which is exactly what the combo's renderer (see createLeftPane())
+     * uses the full path for.
+     */
     private void checkProjectsModel() {
+        D2ProjectRegistry.purgeMissing(iProperties);
         iProjectModel.removeAllElements();
-        File lProjectsDir = new File(D2Project.PROJECTS_DIR);
-        if (!lProjectsDir.exists()) {
-            lProjectsDir.mkdir();
-        } else {
-            File lList[] = lProjectsDir.listFiles();
-            for (int i = 0; i < lList.length; i++) {
-                if (lList[i].isDirectory() && lList[i].canRead() && lList[i].canWrite()) {
-                    iProjectModel.addElement(lList[i].getName());
-                }
-            }
+        for (File lDir : D2ProjectRegistry.getRecentProjects(iProperties)) {
+            iProjectModel.addElement(lDir.getAbsoluteFile());
+        }
+        if (iProject != null
+                && iProjectModel.getIndexOf(iProject.getProjectDirFile().getAbsoluteFile()) == -1) {
+            iProjectModel.addElement(iProject.getProjectDirFile().getAbsoluteFile());
         }
     }
 
@@ -254,15 +302,55 @@ public class D2FileManager extends JFrame {
         checkProjectsModel();
         iChangeProject = new JComboBox(iProjectModel);
         iChangeProject.setPreferredSize(new Dimension(190, 20));
-        iChangeProject.setSelectedItem(iProject.getProjectName());
+        // The model holds project directories (File), not names, now that a project can live
+        // anywhere on disk (plan section 4) -- shown as just the folder name, with the full path
+        // as a tooltip so two same-named projects in different locations stay distinguishable.
+        iChangeProject.setRenderer(new DefaultListCellRenderer() {
+            public Component getListCellRendererComponent(
+                    JList lList, Object lValue, int lIndex, boolean lIsSelected, boolean lHasFocus) {
+                Component lComponent = super.getListCellRendererComponent(lList, lValue, lIndex, lIsSelected, lHasFocus);
+                if (lValue instanceof File && lComponent instanceof JLabel) {
+                    File lDir = (File) lValue;
+                    ((JLabel) lComponent).setText(lDir.getName());
+                    ((JLabel) lComponent).setToolTipText(lDir.getAbsolutePath());
+                }
+                return lComponent;
+            }
+        });
+        if (iProject != null) {
+            iChangeProject.setSelectedItem(iProject.getProjectDirFile().getAbsoluteFile());
+        }
         iChangeProject.addItemListener(new ItemListener() {
 
             public void itemStateChanged(ItemEvent arg0) {
-
-                if (arg0.getStateChange() == ItemEvent.SELECTED) {
-                    closeWindows();
-                    setProject((String) iChangeProject.getSelectedItem());
+                // Set only while THIS code is itself resetting the selection (a Cancel restoring
+                // the previous project, or checkProjectsModel() re-adding it) -- see
+                // iIgnoreProjectSelection's own field javadoc for why this guard exists at all.
+                if (iIgnoreProjectSelection) {
+                    return;
                 }
+                if (arg0.getStateChange() != ItemEvent.SELECTED) {
+                    return;
+                }
+                File lNewProjectDir = ((File) arg0.getItem()).getAbsoluteFile();
+                if (iProject != null && lNewProjectDir.equals(iProject.getProjectDirFile().getAbsoluteFile())) {
+                    return; // already the open project -- nothing to switch.
+                }
+                if (!confirmCloseProject()) {
+                    // Cancel: put the combo back on the project that is actually still open,
+                    // WITHOUT re-firing this very listener (that would recurse straight back into
+                    // confirmCloseProject() -- plan section 6's flagged trap).
+                    iIgnoreProjectSelection = true;
+                    try {
+                        iChangeProject.setSelectedItem(
+                                iProject == null ? null : iProject.getProjectDirFile().getAbsoluteFile());
+                    } finally {
+                        iIgnoreProjectSelection = false;
+                    }
+                    return;
+                }
+                closeWindows();
+                openProject(lNewProjectDir);
             }
         });
 
@@ -271,95 +359,78 @@ public class D2FileManager extends JFrame {
         projControl.setBorder(new TitledBorder(
                 null, ("Project Control"), TitledBorder.LEFT, TitledBorder.TOP, iLeftPane.getFont(), Color.gray));
 
-        JButton newProj = new JButton("New Proj");
+        // No "New Proj" button any more: File / New Project... (createMenubar()) is now the only
+        // way to create a project (plan section 5, step 4: "on garde New Project... comme unique
+        // chemin de création") -- keeping this button too, on top of the removal of the old
+        // (D2FileManager, String) constructor it relied on, would mean reimplementing the exact
+        // same dialog twice.
+        iDelProjButton = new JButton("Del Proj");
 
-        newProj.addActionListener(new ActionListener() {
+        iDelProjButton.addActionListener(new ActionListener() {
             public void actionPerformed(ActionEvent arg0) {
-
-                String lNewName = JOptionPane.showInputDialog(
-                        iContentPane, "Enter the project name:", "New Project", JOptionPane.QUESTION_MESSAGE);
-
-                if (checkNewFilename(lNewName)) {
-                    setProject(lNewName);
-                } else {
+                if (iProject == null) {
+                    return; // guarded by updateProjectDependentUI() anyway; defensive no-op.
+                }
+                if (iProject.getProjectDirFile().getAbsoluteFile()
+                        .equals(D2UserData.getDefaultProjectDir().getAbsoluteFile())) {
                     JOptionPane.showMessageDialog(
-                            iContentPane, "Please enter a valid project name.", "Error!", JOptionPane.ERROR_MESSAGE);
-                }
-            }
-
-            private boolean checkNewFilename(String lNewName) {
-
-                if (lNewName == null) {
-                    return false;
-                }
-                if (lNewName.trim().equals("")) {
-                    return false;
-                }
-                for (int i = 0; i < iProjectModel.getSize(); i++) {
-                    if (lNewName.equalsIgnoreCase((String) iProjectModel.getElementAt(i))) {
-                        return false;
-                    }
-                }
-
-                Pattern projectNamePattern = Pattern.compile("[^/?*:;{}\\\\]+", Pattern.UNIX_LINES);
-                Matcher projectNamePatternMatcher = projectNamePattern.matcher(lNewName);
-
-                if (!projectNamePatternMatcher.matches()) {
-                    return false;
-                }
-                return true;
-            }
-        });
-
-        JButton delProj = new JButton("Del Proj");
-
-        delProj.addActionListener(new ActionListener() {
-            public void actionPerformed(ActionEvent arg0) {
-                if (iChangeProject.getSelectedItem().equals("GoMule")) {
-                    JOptionPane.showMessageDialog(
-                            iContentPane, "Cannot delete default project!", "Error!", JOptionPane.ERROR_MESSAGE);
+                            iContentPane, "Cannot delete the default project!", "Error!", JOptionPane.ERROR_MESSAGE);
                     return;
                 }
-                D2Project delProjName = iProject;
                 if (JOptionPane.showConfirmDialog(
                                 iContentPane,
                                 "Are you sure you want to delete this project? (Your clipboard will be lost!)",
                                 "Really?",
                                 JOptionPane.YES_NO_OPTION)
-                        == 0) {
-                    setProject("GoMule");
-                    if (!delProjName.delProj()) {
-                        JOptionPane.showMessageDialog(
-                                iContentPane, "Error deleting project!", "Error!", JOptionPane.ERROR_MESSAGE);
-                    } else {
-                        checkProjectsModel();
-                    }
+                        != 0) {
+                    return;
+                }
+                // Deleting the directory out from under an open clipboard/tree would mean reading
+                // from files that are about to vanish -- close everything down (with the usual
+                // save prompt) before switching to the default project, exactly like New/Open
+                // Project do.
+                if (!confirmCloseProject()) {
+                    return;
+                }
+                D2Project lToDelete = iProject;
+                closeWindows();
+                openProject(D2UserData.getDefaultProjectDir());
+                if (!lToDelete.delProj()) {
+                    JOptionPane.showMessageDialog(
+                            iContentPane, "Error deleting project!", "Error!", JOptionPane.ERROR_MESSAGE);
                 }
             }
         });
 
-        JButton clProj = new JButton("Clear Proj");
+        iClProjButton = new JButton("Clear Proj");
 
-        clProj.addActionListener(new ActionListener() {
+        iClProjButton.addActionListener(new ActionListener() {
             public void actionPerformed(ActionEvent arg0) {
+                if (iProject == null) {
+                    return;
+                }
                 if (JOptionPane.showConfirmDialog(
                                 iContentPane,
                                 "Are you sure you want to clear this project?",
                                 "Really?",
                                 JOptionPane.YES_NO_OPTION)
-                        == 0) {
-                    closeWindows();
-                    if (!iProject.clearProj()) {
-                        JOptionPane.showMessageDialog(
-                                iContentPane, "Error clearing project!", "Error!", JOptionPane.ERROR_MESSAGE);
-                    }
+                        != 0) {
+                    return;
+                }
+                if (!confirmCloseProject()) {
+                    return;
+                }
+                closeWindows();
+                if (!iProject.clearProj()) {
+                    JOptionPane.showMessageDialog(
+                            iContentPane, "Error clearing project!", "Error!", JOptionPane.ERROR_MESSAGE);
                 }
             }
         });
 
-        JButton lFlavie = new JButton("Proj Flavie Report");
+        iFlavieButton = new JButton("Proj Flavie Report");
 
-        lFlavie.addActionListener(new ActionListener() {
+        iFlavieButton.addActionListener(new ActionListener() {
             public void actionPerformed(ActionEvent pEvent) {
 
                 ArrayList dFileNames = new ArrayList();
@@ -385,9 +456,9 @@ public class D2FileManager extends JFrame {
             }
         });
 
-        JButton projTextDump = new JButton("Proj Txt Dump");
+        iProjTextDumpButton = new JButton("Proj Txt Dump");
 
-        projTextDump.addActionListener(new ActionListener() {
+        iProjTextDumpButton.addActionListener(new ActionListener() {
             public void actionPerformed(ActionEvent pEvent) {
                 workCursor();
                 ArrayList lDumpList = iProject.getCharList();
@@ -467,11 +538,10 @@ public class D2FileManager extends JFrame {
             }
         });
 
-        projControl.addToPanel(newProj, 0, 0, 1, RandallPanel.HORIZONTAL);
-        projControl.addToPanel(delProj, 1, 0, 1, RandallPanel.HORIZONTAL);
-        projControl.addToPanel(clProj, 0, 1, 2, RandallPanel.HORIZONTAL);
-        projControl.addToPanel(lFlavie, 0, 2, 2, RandallPanel.HORIZONTAL);
-        projControl.addToPanel(projTextDump, 0, 3, 2, RandallPanel.HORIZONTAL);
+        projControl.addToPanel(iDelProjButton, 0, 0, 2, RandallPanel.HORIZONTAL);
+        projControl.addToPanel(iClProjButton, 0, 1, 2, RandallPanel.HORIZONTAL);
+        projControl.addToPanel(iFlavieButton, 0, 2, 2, RandallPanel.HORIZONTAL);
+        projControl.addToPanel(iProjTextDumpButton, 0, 3, 2, RandallPanel.HORIZONTAL);
 
         iLeftPane.addToPanel(iChangeProject, 0, 0, 1, RandallPanel.HORIZONTAL);
         iLeftPane.addToPanel(iViewProject, 0, 1, 1, RandallPanel.BOTH);
@@ -789,11 +859,30 @@ public class D2FileManager extends JFrame {
         iMenuBar.setBorder(BorderFactory.createMatteBorder(0, 0, 1, 0, Color.lightGray));
         JMenu fileMenu = new JMenu("File");
 
-        JMenuItem openChar = new JMenuItem("Open Character");
-        JMenuItem newStash = new JMenuItem("New Stash");
-        JMenuItem openStash = new JMenuItem("Open Stash");
-        JMenuItem saveAll = new JMenuItem("Save All");
-        JMenuItem openGrail = new JMenuItem("Holy Grail");
+        // The three project entries (plan section 5, step 4). Deliberately addActionListener
+        // (below), not the addMouseListener the rest of this menu still uses: a MouseAdapter
+        // only fires on an actual mouse press/release, so it silently breaks keyboard activation
+        // (Enter on a focused menu item) and, more importantly here, the KeyStroke accelerators
+        // these three carry -- Ctrl+Shift+N/Ctrl+O/Ctrl+W would be visible in the menu but simply
+        // wouldn't do anything if wired the old way. The style divergence from the rest of this
+        // method is intentional, not an oversight.
+        JMenuItem newProject = new JMenuItem("New Project...");
+        newProject.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_N, InputEvent.CTRL_MASK | InputEvent.SHIFT_MASK));
+        newProject.addActionListener(e -> doNewProject());
+
+        JMenuItem openProject = new JMenuItem("Open Project...");
+        openProject.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_O, InputEvent.CTRL_MASK));
+        openProject.addActionListener(e -> doOpenProject());
+
+        iMenuItemCloseProject = new JMenuItem("Close Project");
+        iMenuItemCloseProject.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_W, InputEvent.CTRL_MASK));
+        iMenuItemCloseProject.addActionListener(e -> doCloseProject());
+
+        iMenuItemOpenChar = new JMenuItem("Open Character");
+        iMenuItemNewStash = new JMenuItem("New Stash");
+        iMenuItemOpenStash = new JMenuItem("Open Stash");
+        iMenuItemSaveAll = new JMenuItem("Save All");
+        iMenuItemOpenGrail = new JMenuItem("Holy Grail");
         JMenu switchLookAndFeelMenu = new JMenu("Switch Appearance");
         for (LookAndFeelOptions lookAndFeelOption : LookAndFeelOptions.values()) {
             JMenuItem menuItem = new JMenuItem(lookAndFeelOption.getNameString());
@@ -801,42 +890,54 @@ public class D2FileManager extends JFrame {
             menuItem.addMouseListener(new MouseAdapter() {
                 @Override
                 public void mousePressed(MouseEvent e) {
+                    // "will be automatically saved" used to be true: closing the app wrote every
+                    // modified file without asking. It now asks (confirmCloseProject(), plan
+                    // section 5, step 3), so the wording has to say so -- and the choice has to be
+                    // persisted through closeListener() rather than before it. Writing the
+                    // property upfront meant that answering Cancel to the unsaved-changes prompt
+                    // left the new appearance recorded on disk while GoMule kept running with the
+                    // old one: the switch looked like it had silently failed, then applied itself
+                    // out of nowhere at the next restart.
                     int check = JOptionPane.showConfirmDialog(
                             null,
-                            "GoMule will exit to switch appearance, you'll need to manually start GoMule again. Any unsaved changes will be automatically saved.",
+                            "GoMule will exit to switch appearance, you'll need to manually start GoMule again. You will be asked what to do with any unsaved changes.",
                             "",
                             OK_CANCEL_OPTION);
                     if (check == 0) {
-                        iProperties.setProperty(LookAndFeelOptions.PROPERTY_NAME, lookAndFeelOption.name());
-                        FileManagerProperties.saveFileManagerProperties(iProperties);
-                        D2FileManager.getInstance().closeListener();
+                        D2FileManager.getInstance()
+                                .closeListener(() -> iProperties.setProperty(
+                                        LookAndFeelOptions.PROPERTY_NAME, lookAndFeelOption.name()));
                     }
                 }
             });
         }
         JMenuItem exitProg = new JMenuItem("Exit");
 
-        JMenu projMenu = new JMenu("Project");
+        iProjMenu = new JMenu("Project");
         JMenuItem projOpt = new JMenuItem("Preferences");
         JMenu aboutMenu = new JMenu("About...");
         iMenuBar.add(fileMenu);
-        iMenuBar.add(projMenu);
+        iMenuBar.add(iProjMenu);
         iMenuBar.add(aboutMenu);
 
-        fileMenu.add(openChar);
+        fileMenu.add(newProject);
+        fileMenu.add(openProject);
+        fileMenu.add(iMenuItemCloseProject);
         fileMenu.addSeparator();
-        fileMenu.add(newStash);
-        fileMenu.add(openStash);
+        fileMenu.add(iMenuItemOpenChar);
         fileMenu.addSeparator();
-        fileMenu.add(saveAll);
+        fileMenu.add(iMenuItemNewStash);
+        fileMenu.add(iMenuItemOpenStash);
         fileMenu.addSeparator();
-        fileMenu.add(openGrail);
+        fileMenu.add(iMenuItemSaveAll);
+        fileMenu.addSeparator();
+        fileMenu.add(iMenuItemOpenGrail);
         fileMenu.addSeparator();
         fileMenu.add(switchLookAndFeelMenu);
         fileMenu.addSeparator();
         fileMenu.add(exitProg);
 
-        projMenu.add(projOpt);
+        iProjMenu.add(projOpt);
 
         this.setJMenuBar(iMenuBar);
 
@@ -857,35 +958,35 @@ public class D2FileManager extends JFrame {
             }
         });
 
-        openChar.addMouseListener(new MouseAdapter() {
+        iMenuItemOpenChar.addMouseListener(new MouseAdapter() {
 
             public void mouseReleased(MouseEvent e) {
                 openChar(true);
             }
         });
 
-        newStash.addMouseListener(new MouseAdapter() {
+        iMenuItemNewStash.addMouseListener(new MouseAdapter() {
 
             public void mouseReleased(MouseEvent e) {
                 newStash(true);
             }
         });
 
-        openStash.addMouseListener(new MouseAdapter() {
+        iMenuItemOpenStash.addMouseListener(new MouseAdapter() {
 
             public void mouseReleased(MouseEvent e) {
                 openStash(true);
             }
         });
 
-        saveAll.addMouseListener(new MouseAdapter() {
+        iMenuItemSaveAll.addMouseListener(new MouseAdapter() {
 
             public void mouseReleased(MouseEvent e) {
                 saveAll();
             }
         });
 
-        openGrail.addMouseListener(new MouseAdapter() {
+        iMenuItemOpenGrail.addMouseListener(new MouseAdapter() {
 
             public void mouseReleased(MouseEvent e) {
                 openGrailWindow();
@@ -906,24 +1007,311 @@ public class D2FileManager extends JFrame {
         return iProject;
     }
 
-    protected void setProject(String pProject) {
-        try {
+    /**
+     * Switches the current project object and pushes it to the two views that hold a direct
+     * reference to it (plan section 5, step 1). Accepts null -- both
+     * {@code D2ViewClipboard.setProject()} and {@code D2ViewProject.setProject()} already clear
+     * themselves to an empty state rather than throwing when handed one (see
+     * D2ViewClipboard.clearProject() and D2ViewProject.refreshTree()'s null checks). Callers are
+     * responsible for closeWindows()/confirmCloseProject() around this -- see openProject() and
+     * doCloseProject() -- this method only ever swaps the reference and refreshes dependent UI.
+     */
+    public void setProject(D2Project pProject) throws Exception {
+        iProject = pProject;
+        iClipboard.setProject(iProject);
+        iViewProject.setProject(pProject);
+        updateProjectDependentUI();
+        setTitle(true);
+    }
+
+    /**
+     * Enables/disables every piece of UI whose meaning depends on a project being open (plan
+     * section 5, step 2) -- called once at the end of the constructor (for whatever
+     * checkProjects() decided) and again every time setProject() runs. "New Project..."/
+     * "Open Project..." are deliberately excluded: they are the only way to ever get out of the
+     * empty state, so they must stay clickable in it.
+     */
+    private void updateProjectDependentUI() {
+        boolean lHasProject = iProject != null;
+
+        iMenuItemCloseProject.setEnabled(lHasProject);
+        iMenuItemOpenChar.setEnabled(lHasProject);
+        iMenuItemNewStash.setEnabled(lHasProject);
+        iMenuItemOpenStash.setEnabled(lHasProject);
+        iMenuItemSaveAll.setEnabled(lHasProject);
+        iMenuItemOpenGrail.setEnabled(lHasProject);
+        iProjMenu.setEnabled(lHasProject);
+
+        // iToolbar's buttons (Open/Add Character, New/Open/Add Stash, Open/Add Shared Stash,
+        // Save All, Drop Calc, Cancel All, Rearrange Windows, the Holy Grail duplicate button)
+        // are all meaningless with no project open, since with no project there cannot be any
+        // open window either (setProject(null)'s invariant) -- walking the container rather than
+        // naming each button keeps this in sync automatically if one is ever added.
+        for (Component lComponent : iToolbar.getComponents()) {
+            if (lComponent instanceof AbstractButton) {
+                lComponent.setEnabled(lHasProject);
+            }
+        }
+
+        if (iChangeProject != null) {
+            iChangeProject.setEnabled(lHasProject);
+        }
+        if (iDelProjButton != null) {
+            iDelProjButton.setEnabled(lHasProject);
+            iClProjButton.setEnabled(lHasProject);
+            iFlavieButton.setEnabled(lHasProject);
+            iProjTextDumpButton.setEnabled(lHasProject);
+        }
+    }
+
+    /**
+     * A defensive-copy list of every open file that currently has unsaved edits (plan section 3,
+     * step 1) -- iItemLists' isModified() lists plus the clipboard's own (labelled "Clipboard"
+     * rather than its real Clipboard.d2x path, which is an implementation detail the user never
+     * chose). What confirmCloseProject()'s dialog below shows.
+     */
+    public List<String> getModifiedFileNames() {
+        List<String> lResult = new ArrayList<String>();
+        if (iClipboard != null && iClipboard.isModified()) {
+            lResult.add("Clipboard");
+        }
+        Iterator lIterator = iItemLists.keySet().iterator();
+        while (lIterator.hasNext()) {
+            String lFileName = (String) lIterator.next();
+            D2ItemList lList = getItemList(lFileName);
+            if (lList != null && lList.isModified()) {
+                lResult.add(lFileName);
+            }
+        }
+        return lResult;
+    }
+
+    /**
+     * The single gate every project-closing action must pass through before it tears anything
+     * down (plan section 5, step 3): Close/New/Open Project, the combo box, closeListener()
+     * (window X / File / Exit), and the Del Proj / Clear Proj buttons. Nothing in this class
+     * saves on window close any more -- closeWindows() is now a pure "close every window" (see
+     * its own comment) -- so "No" here is genuinely safe: it simply never calls
+     * saveAllItemLists().
+     *
+     * @return true if the caller may proceed (nothing was modified, or the user chose Yes/No);
+     * false if the user chose Cancel or dismissed the dialog, in which case the caller MUST abort
+     * its action entirely rather than close/switch anything.
+     */
+    public boolean confirmCloseProject() {
+        // The project's own settings (file list, bank, Flavie preferences) are not "a file the
+        // user edited" -- losing them would silently degrade the app's own state rather than
+        // discard something the user chose to type -- so they are written regardless of the
+        // Yes/No/Cancel choice below, the one piece of the old unconditional closeWindows()
+        // saveAll() that is deliberately kept unconditional.
+        if (iProject != null) {
             iProject.saveProject();
-            iProject = new D2Project(this, pProject);
-            this.setProject(iProject);
-            if (iProjectModel.getIndexOf(pProject) == -1) {
-                iProjectModel.addElement(pProject);
-                iChangeProject.setSelectedItem(iProject.getProjectName());
+        }
+
+        List<String> lModified = getModifiedFileNames();
+        if (lModified.isEmpty()) {
+            return true;
+        }
+
+        StringBuilder lMessage = new StringBuilder("The following files have unsaved changes:\n\n");
+        int lShown = 0;
+        for (String lFile : lModified) {
+            if (lShown >= 15) {
+                lMessage.append("... and ").append(lModified.size() - lShown).append(" more.\n");
+                break;
+            }
+            lMessage.append(lFile).append("\n");
+            lShown++;
+        }
+        lMessage.append("\nSave changes before closing?");
+
+        int lChoice = JOptionPane.showConfirmDialog(
+                iContentPane, lMessage.toString(), "Unsaved changes", JOptionPane.YES_NO_CANCEL_OPTION);
+        if (lChoice == JOptionPane.YES_OPTION) {
+            saveAllItemLists();
+            return true;
+        }
+        if (lChoice == JOptionPane.NO_OPTION) {
+            return true;
+        }
+        // CANCEL_OPTION, or the dialog was dismissed via its own close button (CLOSED_OPTION,
+        // -1) -- both mean "abort", never just "treat like No".
+        return false;
+    }
+
+    /**
+     * Switches to pProjectDir as the current project: constructs the D2Project (creating the
+     * directory/project.properties if this is genuinely new -- see D2Project's constructor),
+     * records it as the most recent project so it survives to the next combo rebuild/restart,
+     * and refreshes the combo/tree/clipboard accordingly. Callers are responsible for
+     * confirmCloseProject() + closeWindows() on whatever project was open before calling this --
+     * see doNewProject()/doOpenProject()/doCloseProject() and the combo box's ItemListener.
+     */
+    private void openProject(File pProjectDir) {
+        try {
+            D2Project lProject = new D2Project(this, pProjectDir);
+            setProject(lProject);
+            D2ProjectRegistry.recordOpened(iProperties, pProjectDir.getAbsoluteFile());
+            FileManagerProperties.saveFileManagerProperties(iProperties);
+            checkProjectsModel();
+            iIgnoreProjectSelection = true;
+            try {
+                iChangeProject.setSelectedItem(lProject.getProjectDirFile().getAbsoluteFile());
+            } finally {
+                iIgnoreProjectSelection = false;
             }
         } catch (Exception pEx) {
             D2FileManager.displayErrorDialog(pEx);
         }
     }
 
-    public void setProject(D2Project pProject) throws Exception {
-        iProject = pProject;
-        iClipboard.setProject(iProject);
-        iViewProject.setProject(pProject);
+    /**
+     * File / New Project... (plan section 5, step 4): a small composite dialog (name + location +
+     * Browse), rather than a JFileChooser in DIRECTORIES_ONLY mode repurposed as "pick a parent
+     * folder and type a name into its filename field" -- the plan calls that notoriously
+     * confusing, and this avoids it entirely.
+     */
+    private void doNewProject() {
+        JTextField lNameField = new JTextField("MyProject");
+        JTextField lLocationField = new JTextField(D2UserData.getProjectsDir().getAbsolutePath());
+        JButton lBrowseButton = new JButton("Browse...");
+        lBrowseButton.addActionListener(e -> {
+            JFileChooser lChooser = new JFileChooser(lLocationField.getText());
+            lChooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
+            if (lChooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
+                lLocationField.setText(lChooser.getSelectedFile().getAbsolutePath());
+            }
+        });
+
+        RandallPanel lPanel = new RandallPanel();
+        lPanel.addToPanel(new JLabel("Name:"), 0, 0, 1, RandallPanel.NONE);
+        lPanel.addToPanel(lNameField, 1, 0, 2, RandallPanel.HORIZONTAL);
+        lPanel.addToPanel(new JLabel("Location:"), 0, 1, 1, RandallPanel.NONE);
+        lPanel.addToPanel(lLocationField, 1, 1, 1, RandallPanel.HORIZONTAL);
+        lPanel.addToPanel(lBrowseButton, 2, 1, 1, RandallPanel.NONE);
+
+        // Looping re-shows the same dialog (with whatever the user already typed still in it) on
+        // a validation error, instead of making a single typo throw the whole thing away.
+        while (true) {
+            int lChoice = JOptionPane.showConfirmDialog(
+                    iContentPane, lPanel, "New Project", JOptionPane.OK_CANCEL_OPTION);
+            if (lChoice != JOptionPane.OK_OPTION) {
+                return; // Cancel: nothing has been closed or created yet at this point.
+            }
+            String lName = lNameField.getText() == null ? "" : lNameField.getText().trim();
+            String lLocation = lLocationField.getText() == null ? "" : lLocationField.getText().trim();
+            String lError = validateNewProject(lName, lLocation);
+            if (lError != null) {
+                JOptionPane.showMessageDialog(iContentPane, lError, "Error!", JOptionPane.ERROR_MESSAGE);
+                continue;
+            }
+
+            File lNewProjectDir = new File(lLocation, lName);
+            if (!confirmCloseProject()) {
+                return;
+            }
+            closeWindows();
+            openProject(lNewProjectDir);
+            return;
+        }
+    }
+
+    /**
+     * Validation for doNewProject() (plan section 5, step 4): a non-empty name using the same
+     * character restriction the old left-pane "New Proj" button used to enforce, an existing
+     * (non-project) target folder that is either absent or empty, and a writable parent location.
+     *
+     * @return null if pName/pLocation are valid, or a user-facing error message otherwise.
+     */
+    private String validateNewProject(String pName, String pLocation) {
+        if (pName.isEmpty()) {
+            return "Please enter a project name.";
+        }
+        if (!PROJECT_NAME_PATTERN.matcher(pName).matches()) {
+            return "Project name contains invalid characters (/ ? * : ; { } \\ are not allowed).";
+        }
+        File lLocationDir = new File(pLocation);
+        if (!lLocationDir.isDirectory() || !lLocationDir.canWrite()) {
+            return "Location does not exist or is not writable: " + pLocation;
+        }
+        File lTarget = new File(lLocationDir, pName);
+        if (lTarget.exists()) {
+            String[] lContents = lTarget.list();
+            if (!lTarget.isDirectory() || (lContents != null && lContents.length > 0)) {
+                return "That folder already exists and is not empty: " + lTarget.getAbsolutePath();
+            }
+        }
+        return null;
+    }
+
+    /**
+     * File / Open Project... (plan section 5, step 4): a FILES_AND_DIRECTORIES chooser accepting
+     * either the project.properties file itself (resolved to its parent folder as a convenience)
+     * or the project's folder directly.
+     */
+    private void doOpenProject() {
+        JFileChooser lChooser = new JFileChooser(D2UserData.getProjectsDir());
+        lChooser.setFileSelectionMode(JFileChooser.FILES_AND_DIRECTORIES);
+        lChooser.setFileFilter(new FileFilter() {
+            public boolean accept(File pFile) {
+                return pFile.isDirectory() || pFile.getName().equalsIgnoreCase("project.properties");
+            }
+
+            public String getDescription() {
+                return "GoMule projects (a folder, or its project.properties)";
+            }
+        });
+        if (lChooser.showOpenDialog(this) != JFileChooser.APPROVE_OPTION) {
+            return;
+        }
+        File lSelected = lChooser.getSelectedFile();
+        File lProjectDir = lSelected.isFile() ? lSelected.getParentFile() : lSelected;
+        if (lProjectDir == null || !D2Project.isProjectDir(lProjectDir)) {
+            JOptionPane.showMessageDialog(
+                    iContentPane,
+                    "This folder does not contain a project.properties file.",
+                    "Not a GoMule project",
+                    JOptionPane.ERROR_MESSAGE);
+            return;
+        }
+        if (iProject != null && lProjectDir.getAbsoluteFile().equals(iProject.getProjectDirFile().getAbsoluteFile())) {
+            return; // already open.
+        }
+        if (!confirmCloseProject()) {
+            return;
+        }
+        closeWindows();
+        openProject(lProjectDir);
+    }
+
+    /**
+     * File / Close Project (plan sections 2 and 5, step 4): the real "no project open" state --
+     * NOT a fallback to the default project. current-project-dir is persisted empty immediately,
+     * not just at exit, so even a crash right after Close still reopens empty on the next launch
+     * (plan's decisions table: Close is a real, remembered state).
+     */
+    private void doCloseProject() {
+        if (iProject == null) {
+            return; // the menu item is disabled in this state anyway; defensive no-op.
+        }
+        if (!confirmCloseProject()) {
+            return;
+        }
+        closeWindows();
+        try {
+            setProject((D2Project) null);
+        } catch (Exception pEx) {
+            displayErrorDialog(pEx);
+        }
+        iProperties.setProperty("current-project-dir", "");
+        FileManagerProperties.saveFileManagerProperties(iProperties);
+        checkProjectsModel();
+        iIgnoreProjectSelection = true;
+        try {
+            iChangeProject.setSelectedItem(null);
+        } finally {
+            iIgnoreProjectSelection = false;
+        }
     }
 
     private void createToolbar() {
@@ -1121,25 +1509,50 @@ public class D2FileManager extends JFrame {
                 }));
     }
 
+    /**
+     * Resolves the project GoMule should open at startup (plan section 4): "current-project-dir"
+     * (a full path) if present, else the pre-registry "current-project" (a bare name, always
+     * resolved under the OLD projects/ directory) for a one-time upgrade, else -- a genuinely
+     * first run -- the default project. An empty "current-project-dir" is not an error case to
+     * recover from: it is exactly what doCloseProject() persists on an explicit Close, and it
+     * means "start with nothing open" (plan's decisions table).
+     */
     private void checkProjects() {
         try {
             iProperties = FileManagerProperties.loadFileManagerProperties();
-            String lCurrent = iProperties.getProperty("current-project"); // ,
-            // "DefaultProject");
+            String lCurrentDirPath = iProperties.getProperty("current-project-dir");
 
-            if (lCurrent != null) {
-                String lProjectDirStr = D2Project.PROJECTS_DIR + File.separator + lCurrent;
-                File lProjectDir = new File(lProjectDirStr);
-                if (!lProjectDir.exists()) {
-                    lCurrent = null;
+            if (lCurrentDirPath == null) {
+                // Back-compat with a pre-registry projects.properties: only the old bare-name key
+                // exists. Resolve it under the user-data projects dir (already migrated, by the
+                // time GoMule.main() reaches here, from the legacy ./projects) and fall through to
+                // persisting the new key below so this branch is only ever taken once.
+                String lLegacyName = iProperties.getProperty("current-project");
+                File lLegacyDir = (lLegacyName == null || lLegacyName.trim().isEmpty())
+                        ? null : new File(D2UserData.getProjectsDir(), lLegacyName);
+                lCurrentDirPath = (lLegacyDir != null && D2Project.isProjectDir(lLegacyDir))
+                        ? lLegacyDir.getAbsolutePath()
+                        // No trace of a previous session at all: open the default project rather
+                        // than starting empty, so a brand-new install looks ready to use right
+                        // away instead of looking broken.
+                        : D2UserData.getDefaultProjectDir().getAbsolutePath();
+            }
+
+            if (lCurrentDirPath.trim().isEmpty()) {
+                iProject = null;
+            } else {
+                File lProjectDir = new File(lCurrentDirPath);
+                if (!D2Project.isProjectDir(lProjectDir)) {
+                    // The remembered project is gone (deleted, renamed, an unmounted drive) --
+                    // fall back to the default project rather than refusing to start.
+                    lProjectDir = D2UserData.getDefaultProjectDir();
                 }
+                iProject = new D2Project(this, lProjectDir);
+                D2ProjectRegistry.recordOpened(iProperties, iProject.getProjectDirFile().getAbsoluteFile());
             }
-            if (lCurrent == null) {
-                lCurrent = "GoMule";
-            }
-
-            iProject = new D2Project(this, lCurrent);
-            //			iBtnProjectSelection.setText(lCurrent);
+            iProperties.setProperty(
+                    "current-project-dir",
+                    iProject == null ? "" : iProject.getProjectDirFile().getAbsolutePath());
         } catch (Exception pEx) {
             displayErrorDialog(pEx);
             iProject = null;
@@ -1148,13 +1561,32 @@ public class D2FileManager extends JFrame {
     }
 
     /**
-     * called on exit or when this window is closed
-     * zip through and make sure all the character
-     * windows close properly, because character
-     * windows save on close
+     * Called on exit (window X, or File / Exit) to persist window state and shut down. Now goes
+     * through confirmCloseProject() FIRST (plan section 5, step 3): a Cancel there must genuinely
+     * cancel the exit, so this returns early with no System.exit(0) at all in that case, rather
+     * than the old behaviour of silently saveAll()-ing everything on the way out.
      */
     public void closeListener() {
-        iProperties.setProperty("current-project", iProject.getProjectName());
+        closeListener(null);
+    }
+
+    /**
+     * Same as {@link #closeListener()}, plus one action applied only once the close is actually
+     * going ahead -- i.e. after confirmCloseProject() has returned true, and before the single
+     * FileManagerProperties.saveFileManagerProperties() call below writes iProperties out. Exists
+     * for the "Switch Appearance" menu (createMenubar()), whose whole job is to record a setting
+     * and restart: a Cancel at the unsaved-changes prompt must leave that setting unwritten.
+     * pOnConfirmed is therefore for iProperties changes only -- it must not save them itself.
+     */
+    public void closeListener(Runnable pOnConfirmed) {
+        if (!confirmCloseProject()) {
+            return;
+        }
+        if (pOnConfirmed != null) {
+            pOnConfirmed.run();
+        }
+        iProperties.setProperty(
+                "current-project-dir", iProject == null ? "" : iProject.getProjectDirFile().getAbsolutePath());
         Rectangle bounds = getBounds();
         iProperties.setProperty("win-state", String.valueOf(getExtendedState()));
         iProperties.setProperty("win-ldiv-loc", String.valueOf(lSplit.getDividerLocation()));
@@ -1248,8 +1680,14 @@ public class D2FileManager extends JFrame {
         return false;
     }
 
+    /**
+     * Pure "close every open item window" (plan section 5, step 3) -- it used to start with an
+     * unconditional saveAll(), silently writing every open .d2s/.d2x/.d2i before the caller had
+     * any say at all. Every caller now goes through confirmCloseProject() first (which itself
+     * still always saves iProject's own settings, just never a game file without asking), so by
+     * the time this runs the save/don't-save decision has already been made.
+     */
     public void closeWindows() {
-        saveAll();
         while (iOpenWindows.size() > 0) {
             D2ItemContainer lItemContainer = (D2ItemContainer) iOpenWindows.get(0);
             if (lItemContainer != null) {
@@ -1291,6 +1729,13 @@ public class D2FileManager extends JFrame {
         checkAll(false);
 
         iClipboard.saveView();
+        if (iProject == null) {
+            // No project ⇒ no open item windows (setProject(null)'s invariant, plan section 5,
+            // step 1) ⇒ iItemLists should already be empty here -- but this is still the one
+            // programmatic entry point the plan calls out by name (step 3), so it gets the same
+            // explicit guard rather than relying on that invariant alone.
+            return;
+        }
         Iterator lIterator = iItemLists.keySet().iterator();
         while (lIterator.hasNext()) {
             String lFileName = (String) lIterator.next();
@@ -1307,6 +1752,14 @@ public class D2FileManager extends JFrame {
 
     private void checkAll(boolean pCancel) {
         if (iIgnoreCheckAll) {
+            return;
+        }
+        if (iProject == null) {
+            // With no project open, iClipboard.getItemLists() returns null (D2ViewClipboard.
+            // clearProject() detaches its D2Stash entirely) and iItemLists is empty anyway (the
+            // invariant on setProject(null): no project ⇒ no open windows) -- nothing here to
+            // poll for on-disk changes. Without this guard, this NPEs on windowActivated() alone,
+            // since that fires regardless of whether a project is open.
             return;
         }
         try {
@@ -1422,6 +1875,12 @@ public class D2FileManager extends JFrame {
     }
 
     public void openChar(String pCharName, boolean load) {
+        if (iProject == null) {
+            // Defensive: this is one of the programmatic entry points the plan calls out by name
+            // (section 5, step 3) that don't go through a menu/toolbar item already gated by
+            // updateProjectDependentUI() -- e.g. D2ViewProject.CharTreeNode.view().
+            return;
+        }
         D2ItemContainer lExisting = null;
         for (int i = 0; i < iOpenWindows.size(); i++) {
             D2ItemContainer lItemContainer = (D2ItemContainer) iOpenWindows.get(i);
@@ -1631,6 +2090,10 @@ public class D2FileManager extends JFrame {
     }
 
     public void openStash(String pStashName, boolean load) {
+        if (iProject == null) {
+            // See openChar(String, boolean)'s comment.
+            return;
+        }
         D2ItemContainer lExisting = null;
         for (int i = 0; i < iOpenWindows.size(); i++) {
             D2ItemContainer lItemContainer = (D2ItemContainer) iOpenWindows.get(i);
@@ -1685,6 +2148,10 @@ public class D2FileManager extends JFrame {
     }
 
     public void openSharedStash(String pSharedStashName, boolean load) {
+        if (iProject == null) {
+            // See openChar(String, boolean)'s comment.
+            return;
+        }
         D2ItemContainer lExisting = null;
         for (int i = 0; i < iOpenWindows.size(); i++) {
             D2ItemContainer lItemContainer = (D2ItemContainer) iOpenWindows.get(i);
@@ -1722,6 +2189,13 @@ public class D2FileManager extends JFrame {
     }
 
     public D2ItemList addItemList(String pFileName, D2ItemListListener pListener) throws Exception {
+        if (iProject == null) {
+            // See openChar(String, boolean)'s comment -- this is the other named entry point
+            // (plan section 5, step 3), reachable e.g. from a stale D2ItemContainer if one were
+            // ever kept alive past a Close, which the invariant says should never happen, but a
+            // clear exception here beats an NPE three lines below on getProject().getType().
+            throw new Exception("No project is open.");
+        }
         D2ItemList lList;
 
         if (iItemLists.containsKey(pFileName)) {
@@ -1878,6 +2352,12 @@ public class D2FileManager extends JFrame {
     }
 
     public void openGrailWindow() {
+        if (iProject == null) {
+            // See openChar(String, boolean)'s comment. The toolbar's own Holy Grail button is
+            // already disabled by updateProjectDependentUI() in this state; this only guards a
+            // direct call.
+            return;
+        }
         if (iGrailView != null) {
             internalWindowForward(iGrailView);
             return;

@@ -42,6 +42,14 @@ import java.util.Properties;
  * Preferences - Java - Code Style - Code Templates
  */
 public class D2Project {
+    /**
+     * LEGACY constant: the pre-3.x default project root, relative to the process's working
+     * directory. No longer where a project's location is derived from (see the
+     * {@code (D2FileManager, File)} constructor below) -- projects can now live anywhere on
+     * disk, addressed by their own directory. Still referenced by {@link D2UserDataMigration}
+     * (the migration source) and by {@link D2UserData}'s own fallback when the real per-OS
+     * user-data directory can't be used.
+     */
     public static final String PROJECTS_DIR = "projects";
     public static final int TYPE_SC = 1;
     public static final int TYPE_HC = 2;
@@ -53,6 +61,7 @@ public class D2Project {
     private D2FileManager iFileManager;
     private String iProjectName;
     private String iProjectDir;
+    private File iProjectDirFile;
     private File iFile;
     private JFileChooser iCharDialog;
     private JFileChooser iStashDialog;
@@ -76,20 +85,29 @@ public class D2Project {
     private boolean iIgnoreItems;
     private boolean allowDelete;
 
-    public D2Project(D2FileManager pFileManager, String pProjectName) {
+    /**
+     * The canonical constructor (plan section 4): a project IS a directory containing
+     * {@code project.properties}, addressed directly by that directory rather than derived from
+     * a bare name under {@link #PROJECTS_DIR}. Replaces the old {@code (D2FileManager, String)}
+     * constructor entirely -- it was removed rather than kept alongside this one, since having
+     * both would leave two contradictory ways to locate the same project (plan section 4).
+     */
+    public D2Project(D2FileManager pFileManager, File pProjectDir) {
         iFileManager = pFileManager;
         boolean lNew = false;
 
-        iProjectName = pProjectName;
-        iProjectDir = PROJECTS_DIR + File.separator + iProjectName;
-        File lProjectDir = new File(iProjectDir);
-        if (!lProjectDir.exists()) {
-            // if it doesn't exist, make it
-            lProjectDir.mkdir();
+        iProjectDirFile = pProjectDir;
+        iProjectName = pProjectDir.getName();
+        iProjectDir = pProjectDir.getAbsolutePath();
+        if (!pProjectDir.exists()) {
+            // mkdirs(), not mkdir(): unlike the old PROJECTS_DIR-relative layout, an arbitrary
+            // "New Project..." location (e.g. two levels deep under Documents) may not have its
+            // parent directories created yet either.
+            pProjectDir.mkdirs();
             lNew = true;
         }
 
-        iFile = new File(iProjectDir + File.separator + "project.properties");
+        iFile = new File(pProjectDir, "project.properties");
         Properties lLoadProperties = new Properties();
         if (iFile.exists() && iFile.canRead()) {
             try {
@@ -262,7 +280,16 @@ public class D2Project {
 
     public boolean delProj() {
 
-        return delDir(new File(iProjectDir));
+        return delDir(iProjectDirFile);
+    }
+
+    /**
+     * @return true if pDir is a directory GoMule can open as a project -- i.e. it contains a
+     * {@code project.properties} file. The one and only definition of "is a project" (plan
+     * section 4): no separate file format, no marker beyond this.
+     */
+    public static boolean isProjectDir(File pDir) {
+        return pDir != null && new File(pDir, "project.properties").isFile();
     }
 
     private boolean getBooleanFromString(String pString, boolean pDefault) {
@@ -376,6 +403,16 @@ public class D2Project {
 
     public String getProjectDir() {
         return iProjectDir;
+    }
+
+    /**
+     * @return the project's own directory, as a File -- {@link #getProjectDir()} kept for its
+     * existing callers (D2ViewClipboard.setProject() concatenates "/Clipboard.d2x" onto the
+     * String form), this for new code (D2FileManager's project switching, D2GrailFirstSeenStore)
+     * that wants to build sibling/child File paths without a round trip through a String.
+     */
+    public File getProjectDirFile() {
+        return iProjectDirFile;
     }
 
     public JFileChooser getCharDialog() {

@@ -28,8 +28,6 @@ one ships two archives:
 Using `GoMule_Reimagined_<version>_windows.zip` (recommended, nothing else to install):
 
 1) Extract the .zip anywhere you have write access — your Desktop or Documents is fine.
-   Avoid `C:\Program Files`: GoMule creates its `projects\` folder next to the executable and
-   cannot write there.
 2) Double-click `GoMule.exe` inside the extracted `GoMule` folder.
 3) Done.
 
@@ -44,6 +42,26 @@ Using `GoMule_Reimagined_<version>.zip` (smaller, but you need a Java runtime in
 
 1) Extract the contents of the .zip file.
 2) Run `GoMule.bat`.
+
+## Your projects
+
+Your projects (character/stash lists, the Clipboard, Holy Grail progress, and the app's own
+settings) live in `%APPDATA%\GoMule-Reimagined`, not next to the GoMule executable. This means
+extracting a new release over an old one, or into a brand new folder, never loses your data. The
+first time you run a release after upgrading from an older GoMule that still used a `projects\`
+folder next to the executable, GoMule copies that folder's contents into `%APPDATA%\GoMule-Reimagined`
+automatically and tells you where they went; the original `projects\` folder is left in place as a
+backup, not deleted.
+
+If you'd rather GoMule kept everything in one portable folder (e.g. running it from a USB stick),
+launch it with `-Dgomule.userdata.dir=<path>` — see `GoMule.bat` for where to add a Java option —
+to use that exact folder instead of `%APPDATA%`.
+
+Use `File / New Project…` to create a project anywhere on disk (a OneDrive folder, another drive,
+next to your saves — anywhere you have write access), `File / Open Project…` to switch to an
+existing one, and `File / Close Project` to leave GoMule with no project open at all. Any of these,
+plus the project drop-down in the left pane, will first ask whether to save any files you have open
+with unsaved changes.
 
 ## Restrictions & Known Bugs
 

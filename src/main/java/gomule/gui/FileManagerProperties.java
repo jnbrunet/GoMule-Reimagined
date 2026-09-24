@@ -1,7 +1,7 @@
 package gomule.gui;
 
 import com.google.common.io.Closeables;
-import gomule.util.D2Project;
+import gomule.util.D2UserData;
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -10,15 +10,22 @@ import java.io.IOException;
 import java.util.Properties;
 
 public class FileManagerProperties {
+    /**
+     * Lives directly under the user-data root now, next to (not inside) "projects" -- plan
+     * section 3's tree -- rather than under the legacy {@code projects/} folder, so the global
+     * settings file is never mistaken for a project of its own. The file NAME is unchanged
+     * ("projects.properties"): renaming it at the same time as moving it would make both the
+     * migration and any future support diagnosis needlessly confusing (plan section 5, step 1).
+     */
     public static File getFileManagerPropertiesFile() throws IOException {
-        File lProjectsDir = new File(D2Project.PROJECTS_DIR);
-        if (!lProjectsDir.exists() && !lProjectsDir.mkdirs()) {
-            throw new IOException("Could not create projects directory: "
-                    + lProjectsDir.getAbsolutePath()
+        File lUserDataDir = D2UserData.getUserDataDir();
+        if (!lUserDataDir.exists() && !lUserDataDir.mkdirs()) {
+            throw new IOException("Could not create user data directory: "
+                    + lUserDataDir.getAbsolutePath()
                     + " (check that GoMule has write permission there)");
         }
 
-        File lProps = new File(D2Project.PROJECTS_DIR + File.separator + "projects.properties");
+        File lProps = new File(lUserDataDir, "projects.properties");
         if (!lProps.exists() && !lProps.createNewFile()) {
             throw new IOException("Could not create properties file: "
                     + lProps.getAbsolutePath()

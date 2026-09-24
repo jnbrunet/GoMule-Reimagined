@@ -16,6 +16,23 @@
   notes. They are served from docs/screenshots/ on main.
 -->
 
+### Projects
+
+- **Projects now live under `%APPDATA%\GoMule-Reimagined`**, not next to the GoMule executable —
+  extracting a new release, or moving it to a new folder, no longer loses your characters,
+  stashes, Clipboard or Holy Grail progress. Existing projects are copied there automatically the
+  first time you run this version; the original `projects\` folder is left untouched as a backup.
+- **`File / New Project…` and `File / Open Project…`** let you keep a project anywhere on disk —
+  a OneDrive folder, another drive, right next to your saves — instead of only under GoMule's own
+  `projects\` folder. `File / Close Project` leaves GoMule with no project open at all.
+- **Closing, switching or creating a project now asks first** if you have unsaved changes, listing
+  which files they're in, with the option to save them, discard them, or cancel and keep working.
+  Nothing is written to disk without your say any more.
+- **`File / Switch Appearance` asks about unsaved changes too**, instead of quietly saving
+  everything, and cancelling that prompt now keeps your current appearance: the new one is only
+  recorded once GoMule is really exiting, so a cancelled switch no longer applied itself anyway at
+  the next restart.
+
 ### Holy Grail
 
 - **New Holy Grail window**, tracking your collection across every character, stash and shared

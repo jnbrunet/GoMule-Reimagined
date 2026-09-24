@@ -13,8 +13,10 @@ import java.util.Properties;
 /**
  * "First seen" persistence (plan section 8, option A): the date a save file never actually
  * records, so GoMule keeps its own record of the first time it ever scanned a given grail entry
- * into existence. Deliberately Swing-free (only {@link D2Project#PROJECTS_DIR}, a plain constant,
- * is pulled from the gui-adjacent util package) so it stays unit-testable headless.
+ * into existence. Deliberately Swing-free (only {@link D2Project}'s directory accessors are
+ * pulled from the gui-adjacent util package) so it stays unit-testable headless -- D2Project's
+ * own constructor is likewise Swing-free as long as it isn't handed a real D2FileManager, which
+ * a test never needs to (see D2GrailFirstSeenStoreTest).
  * <p>
  * Backed by a flat {@link Properties} file, the exact shape {@code D2Project.saveProject()}
  * already uses elsewhere: one line per key, {@code UNIQUE:412=1756900000000} (a
@@ -39,26 +41,67 @@ public final class D2GrailFirstSeenStore {
     }
 
     /**
-     * The real production location: a flat file directly under {@code projects/} (NOT inside the
-     * project's own subdirectory), named after the project -- exactly what plan section 8
-     * specifies.
+     * The current production location (plan section 5, step 2, point 4): INSIDE the project's
+     * own directory, as {@code grail.properties} -- not the pre-3.x flat
+     * {@code projects/<name>-grail.properties} any more. A project on its own OneDrive folder (or
+     * anywhere else now that projects aren't confined under {@code projects/}) must carry its
+     * grail history with it rather than leaving it behind in the user-data root, and two projects
+     * that happen to share a name in two different directories must not silently share one file.
      */
-    public static File fileFor(String pProjectName) {
-        return new File(D2Project.PROJECTS_DIR, pProjectName + FILE_SUFFIX);
+    public static File fileFor(D2Project pProject) {
+        return new File(pProject.getProjectDirFile(), "grail.properties");
     }
 
     /**
-     * Loads the store for the given file, or starts a fresh, empty one if the file doesn't exist
+     * Loads pProject's store, recovering once from the pre-3.x flat location
+     * ({@code <projects dir>/<name>-grail.properties}) if the new in-project file doesn't exist
+     * yet but the old one does. D2UserDataMigration's recursive copy already carries that flat
+     * file over verbatim (it is a sibling of the project directories under {@code projects/}, not
+     * inside any of them, so the generic directory copy picks it up without knowing anything
+     * about grail files specifically) -- this is the other half of that migration, run lazily
+     * the first time a project's grail window is opened rather than eagerly for every project at
+     * startup. Idempotent: {@link #save()} always writes to the NEW location, so this recovery
+     * branch is only ever taken once per project (the next load() finds the new file and never
+     * looks at the old one again).
+     */
+    public static D2GrailFirstSeenStore load(D2Project pProject) {
+        File lNewFile = fileFor(pProject);
+        if (!lNewFile.exists()) {
+            File lProjectParent = pProject.getProjectDirFile().getParentFile();
+            if (lProjectParent != null) {
+                File lLegacyFile = new File(lProjectParent, pProject.getProjectName() + FILE_SUFFIX);
+                if (lLegacyFile.isFile()) {
+                    return load(lLegacyFile, lNewFile);
+                }
+            }
+        }
+        return load(lNewFile);
+    }
+
+    /**
+     * Loads the store from the given file, or starts a fresh, empty one if the file doesn't exist
      * yet, can't be read, or is corrupt. A first-seen record is a nice-to-have, not something
      * that should ever be able to stop the grail window from opening -- this deliberately never
-     * throws.
+     * throws. Kept as a public single-argument overload (rather than folded into
+     * {@link #load(D2Project)}) because the existing unit tests, and any future caller with a
+     * bare file rather than a live D2Project, need to load/save the exact same file.
      */
     public static D2GrailFirstSeenStore load(File pFile) {
+        return load(pFile, pFile);
+    }
+
+    /**
+     * @param pDataFile the file to read the existing properties from.
+     * @param pSaveFile the file {@link #save()} will write to -- normally the same as pDataFile,
+     * except during the one-shot legacy recovery in {@link #load(D2Project)}, where data is read
+     * from the old flat file but every future save goes to the new in-project one.
+     */
+    private static D2GrailFirstSeenStore load(File pDataFile, File pSaveFile) {
         Properties lProperties = new Properties();
-        if (pFile.exists()) {
+        if (pDataFile.exists()) {
             FileInputStream lIn = null;
             try {
-                lIn = new FileInputStream(pFile);
+                lIn = new FileInputStream(pDataFile);
                 lProperties.load(lIn);
             } catch (Exception pEx) {
                 // Missing, unreadable, or genuinely corrupt (not valid .properties syntax) all
@@ -75,7 +118,7 @@ public final class D2GrailFirstSeenStore {
                 }
             }
         }
-        return new D2GrailFirstSeenStore(pFile, lProperties);
+        return new D2GrailFirstSeenStore(pSaveFile, lProperties);
     }
 
     /**

@@ -146,8 +146,7 @@ public class D2ViewGrail extends JInternalFrame implements D2ItemContainer, D2It
         // block); "First seen" tracking degrades to "not available" rather than this window
         // failing to open over it.
         D2Project lProject = iFileManager.getProject();
-        iFirstSeenStore = lProject == null ? null
-                : D2GrailFirstSeenStore.load(D2GrailFirstSeenStore.fileFor(lProject.getProjectName()));
+        iFirstSeenStore = lProject == null ? null : D2GrailFirstSeenStore.load(lProject);
 
         buildUi();
 

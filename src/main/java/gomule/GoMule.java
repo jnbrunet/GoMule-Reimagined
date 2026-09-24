@@ -24,6 +24,7 @@ package gomule;
 import gomule.gui.D2FileManager;
 import gomule.gui.FileManagerProperties;
 import gomule.gui.LookAndFeelOptions;
+import gomule.util.D2UserDataMigration;
 import randall.util.RandallUtil;
 
 import javax.swing.*;
@@ -42,6 +43,11 @@ public class GoMule {
      * @param args Can set L+F
      */
     public static void main(String[] pArgs) {
+        // Once, before anything else touches user data -- in particular before
+        // FileManagerProperties.loadFileManagerProperties() just below, which would otherwise
+        // create an empty destination projects.properties itself and make the migration think it
+        // had already run (its no-op check is "does the destination already exist").
+        D2UserDataMigration.migrateIfNeededOnStartup();
         try {
             Properties fileManagerPropertiesFile = FileManagerProperties.loadFileManagerProperties();
             String lLookAndFeel = LookAndFeelOptions.valueOf(fileManagerPropertiesFile.getProperty(LookAndFeelOptions.PROPERTY_NAME, LookAndFeelOptions.CLASSIC.name())).getLookAndFeelName();
