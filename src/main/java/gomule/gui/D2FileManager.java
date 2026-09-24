@@ -119,18 +119,11 @@ public class D2FileManager extends JFrame {
 
     private JButton flavieSingle;
 
-    // Project-control widgets kept as fields (rather than createLeftPane() locals, as before) so
-    // updateProjectDependentUI() can enable/disable them from outside that method -- plan section
-    // 5, step 2.
-    private JButton iDelProjButton;
-    private JButton iClProjButton;
-    private JButton iFlavieButton;
-    private JButton iProjTextDumpButton;
-
-    // The "Project Control" box holding those four buttons. With no project open they are not
-    // merely unusable but meaningless -- there is no project to delete, clear or report on -- so
+    // The "Project Control" box (Proj Flavie Report, Proj Txt Dump). Kept as a field, unlike the
+    // buttons inside it, because updateProjectDependentUI() has to reach it: with no project open
+    // those two are not merely unusable but meaningless -- there is no project to report on -- so
     // the whole box is hidden rather than greyed out, leaving the empty state showing only what
-    // can actually be acted on.
+    // can actually be acted on (plan section 5, step 2).
     private RandallPanel iProjControlPanel;
 
     // File-menu items whose enabled state depends on a project being open (plan section 5, step
@@ -374,82 +367,25 @@ public class D2FileManager extends JFrame {
 
         RandallPanel projControl = new RandallPanel();
         iProjControlPanel = projControl;
-        projControl.setPreferredSize(new Dimension(190, 150));
+        projControl.setPreferredSize(new Dimension(190, 80));
         projControl.setBorder(new TitledBorder(
                 null, ("Project Control"), TitledBorder.LEFT, TitledBorder.TOP, iLeftPane.getFont(), Color.gray));
 
-        // No "New Proj" button any more: File / New Project... (createMenubar()) is now the only
-        // way to create a project (plan section 5, step 4: "on garde New Project... comme unique
-        // chemin de création") -- keeping this button too, on top of the removal of the old
-        // (D2FileManager, String) constructor it relied on, would mean reimplementing the exact
-        // same dialog twice.
-        iDelProjButton = new JButton("Del Proj");
+        // Three buttons that used to live here are gone: "New Proj", "Del Proj" and "Clear Proj".
+        //
+        // New Proj: File / New Project... (createMenubar()) is now the only way to create a
+        // project -- keeping a second entry point would mean reimplementing the same dialog twice.
+        //
+        // Del Proj / Clear Proj: now that a project is just a folder the user picked the location
+        // of, and that New/Open Project make switching between folders cheap, deleting one belongs
+        // in the file manager, not in here. Del Proj was a recursive delete of whatever directory
+        // happened to be the project -- harmless for a folder GoMule created itself, much less so
+        // for an arbitrary folder someone opened as a project -- and Clear Proj emptied the
+        // character and stash lists while silently leaving shared stashes behind. Neither is worth
+        // keeping as a button that can destroy a folder by accident.
+        JButton lFlavieButton = new JButton("Proj Flavie Report");
 
-        iDelProjButton.addActionListener(new ActionListener() {
-            public void actionPerformed(ActionEvent arg0) {
-                if (iProject == null) {
-                    return; // guarded by updateProjectDependentUI() anyway; defensive no-op.
-                }
-                if (iProject.getProjectDirFile().getAbsoluteFile()
-                        .equals(D2UserData.getDefaultProjectDir().getAbsoluteFile())) {
-                    JOptionPane.showMessageDialog(
-                            iContentPane, "Cannot delete the default project!", "Error!", JOptionPane.ERROR_MESSAGE);
-                    return;
-                }
-                if (JOptionPane.showConfirmDialog(
-                                iContentPane,
-                                "Are you sure you want to delete this project? (Your clipboard will be lost!)",
-                                "Really?",
-                                JOptionPane.YES_NO_OPTION)
-                        != 0) {
-                    return;
-                }
-                // Deleting the directory out from under an open clipboard/tree would mean reading
-                // from files that are about to vanish -- close everything down (with the usual
-                // save prompt) before switching to the default project, exactly like New/Open
-                // Project do.
-                if (!confirmCloseProject()) {
-                    return;
-                }
-                D2Project lToDelete = iProject;
-                closeWindows();
-                openProject(D2UserData.getDefaultProjectDir());
-                if (!lToDelete.delProj()) {
-                    JOptionPane.showMessageDialog(
-                            iContentPane, "Error deleting project!", "Error!", JOptionPane.ERROR_MESSAGE);
-                }
-            }
-        });
-
-        iClProjButton = new JButton("Clear Proj");
-
-        iClProjButton.addActionListener(new ActionListener() {
-            public void actionPerformed(ActionEvent arg0) {
-                if (iProject == null) {
-                    return;
-                }
-                if (JOptionPane.showConfirmDialog(
-                                iContentPane,
-                                "Are you sure you want to clear this project?",
-                                "Really?",
-                                JOptionPane.YES_NO_OPTION)
-                        != 0) {
-                    return;
-                }
-                if (!confirmCloseProject()) {
-                    return;
-                }
-                closeWindows();
-                if (!iProject.clearProj()) {
-                    JOptionPane.showMessageDialog(
-                            iContentPane, "Error clearing project!", "Error!", JOptionPane.ERROR_MESSAGE);
-                }
-            }
-        });
-
-        iFlavieButton = new JButton("Proj Flavie Report");
-
-        iFlavieButton.addActionListener(new ActionListener() {
+        lFlavieButton.addActionListener(new ActionListener() {
             public void actionPerformed(ActionEvent pEvent) {
 
                 ArrayList dFileNames = new ArrayList();
@@ -475,9 +411,9 @@ public class D2FileManager extends JFrame {
             }
         });
 
-        iProjTextDumpButton = new JButton("Proj Txt Dump");
+        JButton lProjTextDumpButton = new JButton("Proj Txt Dump");
 
-        iProjTextDumpButton.addActionListener(new ActionListener() {
+        lProjTextDumpButton.addActionListener(new ActionListener() {
             public void actionPerformed(ActionEvent pEvent) {
                 workCursor();
                 ArrayList lDumpList = iProject.getCharList();
@@ -557,10 +493,8 @@ public class D2FileManager extends JFrame {
             }
         });
 
-        projControl.addToPanel(iDelProjButton, 0, 0, 2, RandallPanel.HORIZONTAL);
-        projControl.addToPanel(iClProjButton, 0, 1, 2, RandallPanel.HORIZONTAL);
-        projControl.addToPanel(iFlavieButton, 0, 2, 2, RandallPanel.HORIZONTAL);
-        projControl.addToPanel(iProjTextDumpButton, 0, 3, 2, RandallPanel.HORIZONTAL);
+        projControl.addToPanel(lFlavieButton, 0, 0, 2, RandallPanel.HORIZONTAL);
+        projControl.addToPanel(lProjTextDumpButton, 0, 1, 2, RandallPanel.HORIZONTAL);
 
         iLeftPane.addToPanel(iChangeProject, 0, 0, 1, RandallPanel.HORIZONTAL);
         iLeftPane.addToPanel(iViewProject, 0, 1, 1, RandallPanel.BOTH);

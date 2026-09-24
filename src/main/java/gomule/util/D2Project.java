@@ -261,28 +261,6 @@ public class D2Project {
         } // end else not new
     }
 
-    private boolean delDir(File dir) {
-
-        boolean delFail = true;
-        if (dir.exists() && dir.canRead()) {
-            if (dir.isDirectory()) {
-                String[] dirCont = dir.list();
-                for (int x = 0; x < dirCont.length; x++) {
-                    delFail = delDir(new File(dir, dirCont[x]));
-                }
-            }
-            if (delFail) {
-                return dir.delete();
-            }
-        }
-        return false;
-    }
-
-    public boolean delProj() {
-
-        return delDir(iProjectDirFile);
-    }
-
     /**
      * @return true if pDir is a directory GoMule can open as a project -- i.e. it contains a
      * {@code project.properties} file. The one and only definition of "is a project" (plan
@@ -650,18 +628,4 @@ public class D2Project {
         return null;
     }
 
-    public boolean clearProj() {
-
-        for (int x = 0; x < iCharList.size(); x++) {
-            deleteCharStash((String) iCharList.get(x));
-            x--;
-        }
-
-        for (int x = 0; x < iStashList.size(); x++) {
-            deleteCharStash((String) iStashList.get(x));
-            x--;
-        }
-        //Error handling should be here, but bla bla bla.
-        return true;
-    }
 }

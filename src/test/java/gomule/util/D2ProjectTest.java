@@ -12,7 +12,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * D2Project addressed by directory (plan section 4/6). Every test here passes a null
  * D2FileManager to the constructor: that field is only ever dereferenced by addChar()/addStash()/
- * addSharedStash()/deleteCharStash()/clearProj()/setBankValue() (all of which reach into
+ * addSharedStash()/deleteCharStash()/setBankValue() (all of which reach into
  * D2FileManager or the D2ViewClipboard/D2ViewProject singletons -- exactly the Swing machinery
  * this suite must never load), and none of those are exercised below. The constructor itself and
  * saveProject() never touch it.

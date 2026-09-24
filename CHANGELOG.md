@@ -28,6 +28,10 @@
 - **Closing, switching or creating a project now asks first** if you have unsaved changes, listing
   which files they're in, with the option to save them, discard them, or cancel and keep working.
   Nothing is written to disk without your say any more.
+- **The `Del Proj` and `Clear Proj` buttons are gone.** A project is now just a folder you chose
+  the location of, so deleting one is a job for Windows Explorer, where you can see exactly what
+  you are removing — `Del Proj` deleted the whole project folder and everything in it, which was
+  no longer safe once a project could be opened from anywhere.
 - **`File / Switch Appearance` asks about unsaved changes too**, instead of quietly saving
   everything, and cancelling that prompt now keeps your current appearance: the new one is only
   recorded once GoMule is really exiting, so a cancelled switch no longer applied itself anyway at
