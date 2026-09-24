@@ -24,10 +24,14 @@
   first time you run this version; the original `projects\` folder is left untouched as a backup.
 - **`File / New Project…` and `File / Open Project…`** let you keep a project anywhere on disk —
   a OneDrive folder, another drive, right next to your saves — instead of only under GoMule's own
-  `projects\` folder. `File / Close Project` leaves GoMule with no project open at all.
+  `projects\` folder. `File / Close Project` leaves GoMule with no project open at all: the file
+  tree and the Clipboard empty out, and everything that only makes sense with a project — the
+  project controls, the character and stash actions, the Holy Grail — disappears or greys out
+  until you open or create one.
 - **Closing, switching or creating a project now asks first** if you have unsaved changes, listing
   which files they're in, with the option to save them, discard them, or cancel and keep working.
-  Nothing is written to disk without your say any more.
+  Nothing is written to disk without your say any more. Only your own characters and stashes are
+  listed there — the Clipboard is part of the project and is always saved for you.
 - **The `Del Proj` and `Clear Proj` buttons are gone.** A project is now just a folder you chose
   the location of, so deleting one is a job for Windows Explorer, where you can see exactly what
   you are removing — `Del Proj` deleted the whole project folder and everything in it, which was
