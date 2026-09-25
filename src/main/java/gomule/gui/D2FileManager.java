@@ -1733,7 +1733,7 @@ public class D2FileManager extends JFrame {
             boolean lModifiedChanges = pCancel;
             D2ItemList lClipboardStash = iClipboard.getItemLists();
 
-            if (!lClipboardStash.checkTimestamp()) {
+            if (lClipboardStash != null && !lClipboardStash.checkTimestamp()) {
                 lChanges = true;
                 if (iClipboard.isModified()) {
                     lModifiedChanges = true;
@@ -1763,7 +1763,16 @@ public class D2FileManager extends JFrame {
             }
 
             if (lChanges) {
-                if (!lClipboardStash.checkTimestamp() || (lModifiedChanges && lClipboardStash.isModified())) {
+                // Identity snapshot of what every file is backed by *before* anything is reloaded:
+                // resyncStaleTimestamps() below uses it to tell "this list was genuinely re-read
+                // from disk" from "this list came out of the reload pass untouched". Has to be
+                // taken before the clipboard is reloaded too, since setProject() swaps its D2Stash
+                // for a freshly read one.
+                HashMap lListsBeforeReload = new HashMap(iItemLists);
+                D2ItemList lClipboardBeforeReload = lClipboardStash;
+
+                if (lClipboardStash != null
+                        && (!lClipboardStash.checkTimestamp() || (lModifiedChanges && lClipboardStash.isModified()))) {
                     try {
                         iClipboard.setProject(iProject);
                     } catch (Exception pEx) {
@@ -1773,31 +1782,121 @@ public class D2FileManager extends JFrame {
 
                 for (int i = 0; i < iOpenWindows.size(); i++) {
                     D2ItemContainer lContainer = (D2ItemContainer) iOpenWindows.get(i);
-                    D2ItemList lList = lContainer.getItemLists();
-                    if (iViewAll != null && lList == iViewAll.getStash()) {
-                        lContainer.disconnect(null);
-                        lContainer.connect();
-                    } else {
-                        if (!lList.checkTimestamp() || (lModifiedChanges && lList.isModified())) {
+                    try {
+                        D2ItemList lList = lContainer.getItemLists();
+                        if (lList == null) {
+                            // A window whose connect() failed -- a .d2s the item parser choked on,
+                            // typically -- stays open in iOpenWindows with no list behind it at
+                            // all. That null used to go straight into checkTimestamp() below, and
+                            // the resulting NPE, swallowed by the catch at the bottom of this
+                            // method, abandoned the rest of the loop: every window after it kept
+                            // its stale list, whose timestamp then re-announced a change on the
+                            // very next windowActivated(), forever. There is nothing to reload for
+                            // a disconnected window, so skip it.
+                            continue;
+                        }
+                        if (iViewAll != null && lList == iViewAll.getStash()) {
+                            lContainer.disconnect(null);
+                            lContainer.connect();
+                        } else if (!lList.checkTimestamp() || (lModifiedChanges && lList.isModified())) {
                             String lFileName = lList.getFilename();
                             lContainer.disconnect(null);
                             if (iViewAll != null && iViewAll.getItemLists() instanceof D2ItemListAll) {
                                 ((D2ItemListAll) iViewAll.getItemLists()).disconnect(lFileName);
                             }
+                            // Both disconnects above only *unsubscribe*; the cached D2ItemList is
+                            // dropped from iItemLists (and so re-read on connect()) only once its
+                            // last listener goes away. Any other subscriber -- today the Holy Grail
+                            // window, which subscribes to every open file -- pins it, so connect()
+                            // below would hand the window back the very same stale object, with its
+                            // stale timestamp, and this whole dialog would fire again on the next
+                            // activation, forever. A reload has to mean a reload: evict it here.
+                            dropCachedItemList(lFileName);
 
                             lContainer.connect();
                             if (iViewAll != null && iViewAll.getItemLists() instanceof D2ItemListAll) {
                                 ((D2ItemListAll) iViewAll.getItemLists()).connect(lFileName);
                             }
                         }
+                    } catch (Exception pEx) {
+                        // One window failing to reload must not cost the others theirs (see the
+                        // null case above for what that used to lead to).
+                        pEx.printStackTrace();
                     }
                 }
+
+                resyncStaleTimestamps(lListsBeforeReload, lClipboardBeforeReload);
             }
         } catch (Exception pEx) {
             pEx.printStackTrace();
         } finally {
             iIgnoreCheckAll = false;
             TITLE_SETTING_LIST_LISTENER.itemListChanged();
+        }
+    }
+
+    /**
+     * The safety net that keeps "Changes on file system detected, reloading files." from turning
+     * into a dialog the user cannot get rid of.
+     *
+     * checkAll() announces a change whenever an open list's timestamp no longer matches the file on
+     * disk, and it runs from windowActivated() -- so dismissing that modal dialog re-activates the
+     * main window and immediately re-runs the check. Harmless as long as the reload pass really did
+     * replace the stale list, but any list that survives the pass untouched keeps its old timestamp
+     * and re-triggers the dialog on the next activation, and the next, with no way out but killing
+     * the process. (Known ways that happened: a window disconnected by a failed parse aborting the
+     * reload loop with an NPE, and a list pinned in iItemLists by a subscriber the pass does not
+     * detach -- both fixed above, but this method is what makes the loop structurally impossible
+     * rather than merely fixed case by case.)
+     *
+     * So: every list that is *still* stale and is still the exact same object it was before the
+     * reload -- i.e. demonstrably never re-read -- has its timestamp re-baselined to what is on
+     * disk now. Its contents stay out of date, but they already were, and the user has been told
+     * once. Lists that WERE re-read are deliberately left alone even if they now read as stale:
+     * that means the file changed again while we were reading it, and the next activation should
+     * legitimately pick that write up.
+     */
+    private void resyncStaleTimestamps(Map pListsBeforeReload, D2ItemList pClipboardBeforeReload) {
+        D2ItemList lClipboardStash = iClipboard.getItemLists();
+        if (lClipboardStash != null && lClipboardStash == pClipboardBeforeReload
+                && !lClipboardStash.checkTimestamp()) {
+            lClipboardStash.initTimestamp();
+        }
+        Iterator lIterator = iItemLists.keySet().iterator();
+        while (lIterator.hasNext()) {
+            String lFileName = (String) lIterator.next();
+            D2ItemList lList = (D2ItemList) iItemLists.get(lFileName);
+            if (lList == null || lList instanceof D2ItemListAll) {
+                // initTimestamp() throws outright on the aggregate list, whose checkTimestamp()
+                // always answers "unchanged" anyway -- it can never be the source of the loop.
+                continue;
+            }
+            if (lList == pListsBeforeReload.get(lFileName) && !lList.checkTimestamp()) {
+                lList.initTimestamp();
+            }
+        }
+    }
+
+    /**
+     * Forgets pFileName's cached D2ItemList so the next addItemList() re-reads the file from disk
+     * instead of handing back the copy already in memory.
+     *
+     * removeItemList() deliberately keeps a list alive while anything is still listening to it (two
+     * windows on one file must share one list, or an edit in one would be invisible in the other),
+     * which is right for closing a window but wrong for reloading one: the reload in checkAll()
+     * needs the bytes re-read even though, say, the Holy Grail window is still subscribed. The
+     * project tree is notified exactly as it is on a real close -- connect() re-announces the file
+     * through addItemList() a moment later -- and the Grail window is refreshed so it drops its
+     * subscription to the object being thrown away (it re-subscribes to the new one from
+     * addItemList(), or, if the reconnect fails, correctly ends up subscribed to nothing).
+     */
+    private void dropCachedItemList(String pFileName) {
+        if (pFileName == null || iItemLists.remove(pFileName) == null) {
+            return;
+        }
+        iViewProject.notifyItemListClosed(pFileName);
+        if (iGrailView != null) {
+            iGrailView.refreshLists();
         }
     }
 

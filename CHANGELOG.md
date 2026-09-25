@@ -87,6 +87,15 @@
 - Items carrying a granted-skill block now use the length the item itself records instead of a
   guess, which had been cutting some unique helms short and stopping the load at that point.
 
+### Files changing on disk
+
+- **"Changes on file system detected" no longer comes back forever.** When the game saved a
+  character GoMule had open, the notice could reappear the instant you closed it, again and again,
+  long after the game had been shut down -- with no way out but killing GoMule. Files are now
+  really re-read when that notice appears: having the Holy Grail window open no longer keeps the
+  old copy in memory, and a character that fails to load no longer stops every other open file
+  from being reloaded.
+
 ### Packaging
 
 - Publish a turn-key Windows executable from a `YYYY.MM` release branch, no Java install required.
