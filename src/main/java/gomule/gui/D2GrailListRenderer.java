@@ -1358,8 +1358,9 @@ public class D2GrailListRenderer extends JLabel implements ListCellRenderer<Obje
      * to read, so this synthesizes the same two bonus kinds straight from the .txt tables instead:
      * <ul>
      *   <li>This piece's own per-threshold bonus: setitems.txt "aprop{N-1}a"/"aprop{N-1}b" (each
-     *   with its "apar"/"amin"/"amax") -- D2Item.java:1341-1347's rollsAValue check is the existing
-     *   precedent confirming both the "a" and "b" slot are real, independent bonus slots.</li>
+     *   with its "apar"/"amin"/"amax") -- readExtend2's own declaresABonus check (the set-bonus
+     *   list loop in D2Item, keyed on "aprop{N}a"/"aprop{N}b") is the existing precedent
+     *   confirming both the "a" and "b" slot are real, independent bonus slots.</li>
      *   <li>The set's own bonus at that same threshold: sets.txt (D2TxtFile.FULLSET) "PCode{N}a"
      *   (with "PMin"/"PMax"/"PParam"). Deliberately the "a" slot only, never "b" -- copying
      *   D2Item.addSetProperties (D2Item.java:1137-1147) exactly, which itself never reads

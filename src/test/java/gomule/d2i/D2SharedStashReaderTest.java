@@ -2,6 +2,7 @@ package gomule.d2i;
 
 import com.google.common.io.BaseEncoding;
 import com.google.common.io.Resources;
+import gomule.item.D2Item;
 import gomule.item.D2ItemRenderer;
 import gomule.util.D2BitReader;
 import org.junit.jupiter.api.Test;
@@ -78,7 +79,7 @@ public class D2SharedStashReaderTest {
     // tabs to hold runes/keys/gems (see the user's report). Panes 0-4 are completely ordinary and
     // exercised four more real item-format gaps independently of that conversion -- a set item
     // ("Death Knight's Demon Blade") with a fixed, never-rolled threshold-bonus property
-    // (D2Item.needsStoredBaseValue()'s comment), the same flag-29 quirk fixed earlier needing a
+    // (readExtend2's set-bonus comment), the same flag-29 quirk fixed earlier needing a
     // different trailing-bit count depending on whether the skill it grants is randomly picked
     // or just named (D2Item.hasRandomlyPickedSkillProperty()'s comment), and -- the deciding
     // finding -- proof that the long-standing "socketed XOR ethereal" trailing-bit rule was wrong
@@ -126,16 +127,35 @@ public class D2SharedStashReaderTest {
         assertTrue(stash.isItemsIncomplete());
         // The 2 converted (incomplete) tabs are hidden from the UI; the 5 real tabs remain.
         assertEquals(5, stash.getVisibleTabCount());
-        // All 5 visible tabs loaded fine, so no misleading "[LOADED PARTIALLY]" warning is shown.
-        assertFalse(stash.hasVisibleIncompletePane());
 
-        assertEquals(45, stash.getPane(0).getItems().size());
+        // Pane 0 used to load all 45 items and no longer does -- the one case a table-driven
+        // set-bonus rule cannot survive, and a deliberate trade. This file is the OLDEST snapshot
+        // of the user's stash, and it holds a "Maadi's Soul" saved while the mod's setitems.txt
+        // still gave that item a rolled threshold-4 bonus ("extra_bonespears", aprop4a). The
+        // installed mod has since deleted that bonus (it is a plain prop7 now), so the item's
+        // stored bonus list has nothing left in the table to be found by, and the 5 items after it
+        // in the pane desync. ./d2111/setitems.txt is what decides this, and it has to match the
+        // INSTALLED mod or currently-saved items break instead: leaving the table stale is what
+        // produced the user's actual bug report (an "Afterlife" in a live stash desyncing the 33
+        // items after it -- see afterlifeStashWithThreeSetBonusListsLoadsTheWholeFirstTab below,
+        // and readExtend2's set-bonus comment for the full reasoning). Reading undeclared
+        // thresholds speculatively was tried as a way to have both and is not viable: the
+        // 9-bit-id trial-read probe is not strong enough to run unguarded and over-read real items
+        // in two other fixtures here. So the current table wins and this one old pane goes
+        // partial. Everything else in the file is unaffected.
+        assertTrue(stash.getPane(0).isIncomplete());
+        assertTrue(stash.getPane(0).getIncompleteReason().contains("failed to parse"));
+        assertNotNull(stash.getPane(0).getOriginalBytes(), "a partial pane must still save verbatim");
         assertEquals(850000, stash.getPane(0).getGold());
+        // Pane 0 is a visible tab, so -- unlike the two hidden converted tabs -- it does now report
+        // a partial load to the user, which is the honest answer for a pane GoMule cannot decode.
+        assertTrue(stash.hasVisibleIncompletePane());
+
         assertEquals(50, stash.getPane(1).getItems().size());
         assertEquals(46, stash.getPane(2).getItems().size());
         assertEquals(44, stash.getPane(3).getItems().size());
         assertEquals(32, stash.getPane(4).getItems().size());
-        for (int i = 0; i <= 4; i++) {
+        for (int i = 1; i <= 4; i++) {
             assertFalse(stash.getPane(i).isIncomplete(), "pane " + i + " should have loaded completely");
         }
 
@@ -158,11 +178,16 @@ public class D2SharedStashReaderTest {
         assertTrue(stash.getPane(6).getIncompleteReason().contains("No item-list"));
         assertNotNull(stash.getPane(6).getOriginalBytes());
 
-        // Find pane 5 and 6's exact byte ranges in the original file directly (independently of
-        // the reader under test), to check their preserved bytes against, below.
+        // Find pane 0, 5 and 6's exact byte ranges in the original file directly (independently of
+        // the reader under test), to check their preserved bytes against, below. Pane 0 is in this
+        // list now that it loads partially: the point of the byte-preserving save is precisely that
+        // a pane GoMule can't decode still survives a save untouched, so nothing in it is lost on
+        // disk even though the UI can't show it.
         int[] markerOffsets = new D2BitReader(originalBytes.clone()).findBytes(D2SharedStashReader.STASH_HEADER_START);
+        byte[] originalPane0Bytes = java.util.Arrays.copyOfRange(originalBytes, markerOffsets[0], markerOffsets[1]);
         byte[] originalPane5Bytes = java.util.Arrays.copyOfRange(originalBytes, markerOffsets[5], markerOffsets[6]);
         byte[] originalPane6Bytes = java.util.Arrays.copyOfRange(originalBytes, markerOffsets[6], originalBytes.length);
+        assertArrayEquals(originalPane0Bytes, stash.getPane(0).getOriginalBytes());
         assertArrayEquals(originalPane5Bytes, stash.getPane(5).getOriginalBytes());
         assertArrayEquals(originalPane6Bytes, stash.getPane(6).getOriginalBytes());
 
@@ -171,13 +196,14 @@ public class D2SharedStashReaderTest {
         byte[] savedBytes = java.nio.file.Files.readAllBytes(tempFile.toPath());
         int[] savedMarkerOffsets = new D2BitReader(savedBytes.clone()).findBytes(D2SharedStashReader.STASH_HEADER_START);
         assertEquals(7, savedMarkerOffsets.length);
+        assertArrayEquals(originalPane0Bytes, java.util.Arrays.copyOfRange(savedBytes, savedMarkerOffsets[0], savedMarkerOffsets[1]));
         assertArrayEquals(originalPane5Bytes, java.util.Arrays.copyOfRange(savedBytes, savedMarkerOffsets[5], savedMarkerOffsets[6]));
         assertArrayEquals(originalPane6Bytes, java.util.Arrays.copyOfRange(savedBytes, savedMarkerOffsets[6], savedBytes.length));
 
         D2SharedStash reread = new D2SharedStashReader().readStash(tempFile.getAbsolutePath());
         assertEquals(7, reread.getPanes().size());
         assertTrue(reread.isItemsIncomplete());
-        assertEquals(45, reread.getPane(0).getItems().size());
+        assertTrue(reread.getPane(0).isIncomplete());
         assertEquals(850000, reread.getPane(0).getGold());
         assertEquals(50, reread.getPane(1).getItems().size());
         assertEquals(46, reread.getPane(2).getItems().size());
@@ -364,6 +390,71 @@ public class D2SharedStashReaderTest {
                 "the real Warlock grand charm should render its skill tab name");
         assertTrue(allDumps.stream().noneMatch(d -> d.contains("Unknown Tree")),
                 "no item should fall through to 'Unknown Tree (P 188)'");
+    }
+
+    // A sixth real shared stash, and the one that proved ./d2111/setitems.txt has to be kept in
+    // sync with the installed mod rather than frozen. The user's log showed the usual null-message
+    // NullPointerException out of D2Item.readExtend while opening this file: its first tab decoded
+    // 15 items and then died. The culprit was item 15, a set item -- "Afterlife" (Hades'
+    // Underworld, set id 192, a Demonhide Armor). The installed mod gives that row three rolled
+    // threshold bonuses (aprop1a "nec", aprop2a "regen", aprop3a "regen-mana"), and this save
+    // stores all three lists back-to-back: +1 Necromancer skills (item_addclassskills, class 2),
+    // then hpregen, then manarecoverybonus. The shipped table still had the older row, which
+    // declared threshold 3 only, so the parser read exactly one list and ended the item 52 bits
+    // early -- desyncing all 33 items after it in the tab, which is what the reported crash
+    // actually was. Syncing the table is the fix; the two directions this can break in, and why
+    // probing the bitstream instead is not an option, are laid out in readExtend2's set-bonus
+    // comment and in the second stash's test above.
+    // This also pins down what the "declares a bonus" half of that rule has to be: the mod moved
+    // "The River Stix"'s nofreeze bonus from aprop4a (with amin/amax) to aprop2a (a fixed value,
+    // no amin/amax), so a rule keyed on "declares a *rolled* bonus" stopped finding the list this
+    // file's own copy of that ring still stores. Both rings are in here, in the first tab.
+    @Test
+    public void afterlifeStashWithThreeSetBonusListsLoadsTheWholeFirstTab() throws Exception {
+        D2TxtFile.constructTxtFiles("./d2111");
+        String filename = new java.io.File(
+                Resources.getResource("sharedStash/AfterlifeSharedStashSoftCoreV2.d2i").toURI())
+                .getAbsolutePath();
+
+        D2SharedStash stash = new D2SharedStashReader().readStash(filename);
+
+        assertEquals(7, stash.getPanes().size());
+
+        // The regression: the first tab used to stop at 15 items; it now loads all 49.
+        assertFalse(stash.getPane(0).isIncomplete(), "first tab should load completely");
+        assertEquals(49, stash.getPane(0).getItems().size());
+        assertEquals(2500000, stash.getPane(0).getGold());
+        assertTrue(stash.getPane(0).getItems().stream()
+                        .anyMatch(it -> "Afterlife".equals(it.getItemName())),
+                "first tab should contain the Afterlife that used to break it");
+        // The item right after Afterlife in the file -- the first casualty of its 52-bit under-read,
+        // and so the thing that proves the boundary is right rather than merely non-throwing.
+        assertTrue(stash.getPane(0).getItems().stream()
+                        .anyMatch(it -> "Cleglaw's Tooth".equals(it.getItemName())),
+                "the item immediately after Afterlife should decode");
+        // Afterlife's three stored bonus lists decode into their real stats, not just into the
+        // right number of bits: +1 Necromancer skills is the first list's own value (class 2).
+        D2Item lAfterlife = stash.getPane(0).getItems().stream()
+                .filter(it -> "Afterlife".equals(it.getItemName()))
+                .findFirst().orElseThrow(AssertionError::new);
+        String lDump = D2ItemRenderer.itemDump(lAfterlife, true).replace("\r", "");
+        assertTrue(lDump.contains("Necromancer"), "Afterlife's threshold-1 bonus (nec) should render: " + lDump);
+
+        // All of the other visible tabs load fully too.
+        for (int i = 0; i <= 4; i++) {
+            assertFalse(stash.getPane(i).isIncomplete(), "pane " + i + " should have loaded completely");
+        }
+        assertEquals(39, stash.getPane(1).getItems().size());
+        assertEquals(29, stash.getPane(2).getItems().size());
+
+        // Panes 5 and 6 are the two DLC-converted tabs: still incomplete, still byte-preserved and
+        // still hidden, so no visible tab reports a partial load.
+        assertEquals(5, stash.getVisibleTabCount());
+        assertFalse(stash.hasVisibleIncompletePane());
+        assertTrue(stash.getPane(5).isIncomplete());
+        assertNotNull(stash.getPane(5).getOriginalBytes());
+        assertTrue(stash.getPane(6).isIncomplete());
+        assertNotNull(stash.getPane(6).getOriginalBytes());
     }
 
     private List<String> getItemDumps(D2SharedStash.D2SharedStashPane pane) {

@@ -187,7 +187,11 @@ public class D2GrailScannerTest {
         assertNotNull(lFindings.get(lOakheart.getKey()), "Oakheart not found by the scanner in the shared stash");
 
         // Set items and runewords are also visible straight from a .d2i pane, not just uniques.
-        assertNotNull(lFindings.get(D2GrailKey.set(75)), "Immortal King's Stone Crusher missing from the shared stash scan");
+        // "Laying of Hands" (set id 96, pane 1) rather than this fixture's "Immortal King's Stone
+        // Crusher": that one sits in pane 0, which no longer loads in full -- see
+        // D2SharedStashReaderTest's own note on Maadi's Soul for why. Any fully-loading pane's set
+        // item proves the same point.
+        assertNotNull(lFindings.get(D2GrailKey.set(96)), "Laying of Hands missing from the shared stash scan");
         assertNotNull(lFindings.get(D2GrailKey.runeword("War")), "runeword 'War' missing from the shared stash scan");
 
         // D2SharedStash has no type-specific short-name rule (unlike D2Character/D2Stash), so it

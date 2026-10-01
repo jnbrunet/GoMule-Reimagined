@@ -76,6 +76,10 @@
   instead of silently disappearing from an item.
 - The `.d2x` stash view shows the selected item's sprite.
 - Required levels are correct again on affixed items and on uniques.
+- An item that grants a skill no longer takes its required level from an unrelated skill. The
+  skill was being looked up in the wrong table, so the level could come from whatever happened to
+  share a row -- including the game's internal interface entries, which is what put the
+  "Failed to parse level req number for Map" line in the log on every load.
 
 ### Characters and stashes that would not load
 
@@ -86,6 +90,13 @@
   one affected character was losing 34 of its 59 items, including everything it had equipped.
 - Items carrying a granted-skill block now use the length the item itself records instead of a
   guess, which had been cutting some unique helms short and stopping the load at that point.
+- **Shared stash tabs holding a set item no longer stop loading partway.** GoMule's copy of the
+  mod's set tables had fallen behind the installed mod, and set bonuses are stored in the save
+  itself: an "Afterlife" armour from Hades' Underworld had gained two bonuses GoMule did not know
+  about, so it was read short and took the 33 items after it in the tab down with it. The tables
+  are now in step with the mod. If a tab still refuses to load, your copy of the mod is probably
+  newer than this release -- the items are safe either way, since a tab GoMule cannot read is
+  always saved back exactly as it was.
 
 ### Files changing on disk
 

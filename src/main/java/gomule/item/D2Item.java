@@ -1102,26 +1102,8 @@ public class D2Item implements Comparable, D2ItemInterface {
         }
     }
 
-    // A threshold-bonus property with no rolled range (only a fixed "apar" param, e.g. a set
-    // item's "cold-len" always being exactly 300) still needs a stored base value if its
-    // underlying stat computes its real effect from that value at runtime (itemstatcost.txt's
-    // "op" column, e.g. "att/lvl" -> item_tohit_perlevel, "+X to Attack Rating per level" --
-    // confirmed real via Angelic Halo, where skipping it desynced the next property list).
-    // A fixed-param stat with no such computation (no "op") has nothing further to derive at
-    // runtime and isn't stored at all -- confirmed real via Death Knight's Demon Blade, where
-    // including an (absent) list for "cold-len" desynced everything after it.
-    private boolean needsStoredBaseValue(String pPropertyCode) {
-        if (pPropertyCode.equals("")) return false;
-        D2TxtFileItemProperties propRow = D2TxtFile.PROPS.searchColumns("code", pPropertyCode);
-        if (propRow == null) return false;
-        String statName = propRow.get("stat1");
-        if (statName.equals("")) return false;
-        D2TxtFileItemProperties statRow = D2TxtFile.ITEM_STAT_COST.searchColumns("Stat", statName);
-        return statRow != null && !statRow.get("op").equals("");
-    }
-
-    // Whether a set item's threshold-bonus property list setitems.txt says *could* be here
-    // (needsStoredBaseValue's rule, or the caller's own amin/amax check) actually *is* here for
+    // Whether a set item's threshold-bonus property list setitems.txt says *could* be here (the
+    // caller's "does this threshold declare a bonus at all" check) actually *is* here for
     // this specific saved instance -- see the "quality == 5" block's comment for two real
     // instances of the same item ("The River Stix") needing opposite answers that no static rule
     // predicted. A real property list always opens with a raw 9-bit stat ID, so peeking those 9
@@ -1378,52 +1360,55 @@ public class D2Item implements Comparable, D2ItemInterface {
         // track which thresholds are *currently active* (i.e. how many pieces of the set the
         // player has on right now), which can go up and down as gear changes, but the bonus
         // values themselves -- once rolled -- are stored permanently regardless of whether
-        // they're presently contributing. The number of stored lists instead matches the number
-        // of threshold slots (1 through 5, "a" and "b" each) that actually roll a random value
-        // for this specific set item in setitems.txt -- confirmed against three real set items:
-        // Immortal King's Stone Crusher (lSet all five thresholds: 0,1,1,1,1 -- i.e. missing the
-        // *lowest* one -- but all five thresholds roll a value, and reading five lists, not
-        // four, was required), Ebony Plate of Evil (lSet 0,0,1,1,0 -- two thresholds active --
-        // but only two thresholds (2 and 3) roll a value, and reading exactly those two, not
-        // four, was required), and Death Knight's Demon Blade (three thresholds have a property
-        // at all, but the middle one, "cold-len", only ever sets a fixed value -- apar2a, no
-        // amin2a/amax2a -- nothing to roll, so nothing was stored for it; treating it the same
-        // as the other two and reading three lists decoded plausible-looking but wrong values
-        // for the third, eventually hitting a stat with no "Save Bits" at all that can only
-        // appear in the file from a misread position like this). All three contradict "read one
-        // list per active lSet flag", "read up to the highest active flag", and "one list per
-        // threshold with any property at all" -- only "one list per threshold that rolls a
-        // value" fits all three.
-        // Even that rule has an exception no static txt-driven guess can predict: setitems.txt
-        // marking a threshold as roll-capable (an amin/amax pair, or an op-based apar) does not
-        // guarantee THIS item instance ever actually rolled it -- two real copies of a D2RMM set
-        // ring, "The River Stix" (Hades' Underworld, its only roll-capable threshold being 4,
-        // "nofreeze"), needed opposite answers: one had nothing stored for threshold 4 at all
-        // (reading it read into the next item's bits and desynced the mercenary's next item), the
-        // other did have it stored -- and neither copy's lSet flags (both examples above, plus a
-        // real set item with EVERY threshold's own lSet flag clear yet its highest-rolling
-        // threshold still stored -- Janis' Gloves, threshold 5, "str") predict which. So rather
-        // than guess further from static data, each roll-capable threshold's list is confirmed
-        // against the bitstream itself before being read: a real property list always opens with
-        // a raw 9-bit stat ID, so isSetBonusListPresent() peeks those 9 bits (restoring position
-        // either way) and checks whether they resolve to the list terminator (511) or a real,
-        // Save-Bits-bearing itemstatcost.txt row; if instead they're a stray value that resolves
-        // to nothing real (this fix's own reason for existing: reading The River Stix's absent
-        // threshold 4 first manifested as exactly this -- an in-range but Save-Bits-less stat ID,
-        // "stamdrainmindam"), the list is treated as absent and left untouched for whatever
-        // actually follows (this item's own trailing bits).
-        // A real v99 shared-stash fixture (predating this discovery, from issue #1) breaks under
-        // even the setitems.txt-driven rule -- it stores bonus lists only for thresholds the lSet
-        // flags actually mark active, same as this code always assumed before now -- so the old
-        // behavior is kept for anything not confirmed to be on the current format.
+        // they're presently contributing. Which lists are present is instead decided per
+        // threshold slot (1 through 5, "a" and "b" each) by two things together: setitems.txt has
+        // to declare a bonus property for the slot at all, AND the bitstream itself has to
+        // actually have a list sitting at this position (isSetBonusListPresent(), below).
+        // The lSet flags are ruled out by three real set items: Immortal King's Stone Crusher
+        // (lSet all five thresholds: 0,1,1,1,1 -- i.e. missing the *lowest* one -- yet five lists,
+        // not four, were required), Ebony Plate of Evil (lSet 0,0,1,1,0 -- two thresholds active
+        // -- but the two lists stored were thresholds 2 and 3, not 3 and 4), and a real set item
+        // with EVERY threshold's own lSet flag clear yet a stored list anyway (Janis' Gloves,
+        // threshold 5, "str"). Reading one list per set lSet flag was re-tried against every
+        // fixture here and broke four of them, so that rule (which the pre-v99 branch below still
+        // uses, and which a real version-99 fixture from issue #1 does follow) is not the current
+        // format's.
+        // The table half of the rule is only ever a "could a list be here": it cannot say whether
+        // THIS saved instance stored one. Two real copies of a D2RMM set ring, "The River Stix"
+        // (Hades' Underworld), needed opposite answers -- one had nothing stored for its
+        // "nofreeze" threshold at all (reading it read into the next item's bits and desynced the
+        // mercenary's next item), the other did -- and nothing static predicts which. So each
+        // declared threshold's list is confirmed against the bitstream before being read: a real
+        // property list always opens with a raw 9-bit stat ID, so isSetBonusListPresent() peeks
+        // those 9 bits (restoring position either way) and trial-reads the whole list, accepting
+        // it only if it terminates cleanly on its own 511. That probe is also what makes the
+        // table half safe to keep this loose -- "declares a bonus" rather than "declares a
+        // *rolled* bonus": a threshold whose property only ever sets a fixed value stores nothing
+        // (Death Knight's Demon Blade's "cold-len": apar2a, no amin2a/amax2a), and the probe
+        // rejects it on the bits, which is both simpler and strictly more robust than inferring
+        // it from the table. It has to be the loose form, because the mod moves these columns
+        // around between versions: Reimagined moved The River Stix's "nofreeze" from aprop4a
+        // (with amin/amax 1) to aprop2a (fixed, no amin/amax), and the older saves that still
+        // store a list for it only keep parsing under the loose rule.
+        // What no table-driven rule can survive is the mod deleting a threshold bonus outright:
+        // an item saved while it existed still stores that list, but the current table gives
+        // nothing to probe for. "Maadi's Soul" is exactly that (its aprop4a "extra_bonespears"
+        // became a plain prop7), and it is why pane 0 of the oldest shared-stash fixture now
+        // loads partially -- see D2SharedStashReaderTest. Probing undeclared thresholds was tried
+        // as a way out and is not viable: the 9-bit-id-plus-trial-read probe is not strong enough
+        // to run unguarded, and doing so over-read real items in two other fixtures.
+        // The practical rule for ./d2111/setitems.txt, then, is that it MUST stay in sync with
+        // the installed mod: a stale row desyncs every item after an affected set item. Afterlife
+        // (Hades' Underworld) is the case that proved it -- the installed mod gives it rolled
+        // bonuses on thresholds 1, 2 and 3 while the shipped table still had only threshold 3, so
+        // the parser read one list where the file stored three and lost 52 bits, taking out the
+        // 33 items after it in the user's stash tab.
         if (quality == 5) {
             if (usesPostV99ItemFormat() && iSetItemRow != null) {
                 for (int x = 1; x <= 5; x++) {
-                    boolean rollsAValue = !iSetItemRow.get("amin" + x + "a").equals("")
-                            || !iSetItemRow.get("amin" + x + "b").equals("")
-                            || needsStoredBaseValue(iSetItemRow.get("aprop" + x + "a"))
-                            || needsStoredBaseValue(iSetItemRow.get("aprop" + x + "b"));
-                    if (rollsAValue && isSetBonusListPresent(pFile)) {
+                    boolean declaresABonus = !iSetItemRow.get("aprop" + x + "a").equals("")
+                            || !iSetItemRow.get("aprop" + x + "b").equals("");
+                    if (declaresABonus && isSetBonusListPresent(pFile)) {
                         readProperties(pFile, x + 1);
                     }
                 }
@@ -1624,18 +1609,30 @@ public class D2Item implements Comparable, D2ItemInterface {
             if (((D2Prop) iProps.get(x)).getPNum() == 97
                     || ((D2Prop) iProps.get(x)).getPNum() == 107) {
 
-                D2TxtFileItemProperties skillsRow = D2TxtFile.SKILLS.searchColumns(
-                        "skilldesc",
-                        D2TxtFile.SKILL_DESC.getRow(
-                                ((D2Prop) iProps.get(x)).getPVals()[0]).get(
-                                "skilldesc"));
+                // The property's first value is a skills.txt skill id, so the row is just
+                // SKILLS.getRow(id) -- skills.txt is indexed by that id (see
+                // D2TxtFile.resolveSkillId()'s comment, and D2Prop's renderers, which already do
+                // it this way). This used to take the two hops the other way round --
+                // SKILL_DESC.getRow(id), then search SKILLS for whatever skilldesc that row named
+                // -- but skilldesc.txt is NOT indexed by skill id, so the id landed on an
+                // unrelated skilldesc row and the level requirement came from whatever skill
+                // happened to share it. The user's log is what exposed it: a stash item resolved
+                // to "Map", one of skills.txt's five UI pseudo-skills (SwapWeapons, Map,
+                // ShowItems, RunToggle and the unused "Hex Purge Explosion"), whose reqlevel
+                // column is blank -- printing "Failed to parse level req number for Map" on every
+                // load. A blank reqlevel is still treated as "no requirement" rather than an
+                // error, since those rows legitimately have none.
+                D2TxtFileItemProperties skillsRow = D2TxtFile.SKILLS.getRow(
+                        ((D2Prop) iProps.get(x)).getPVals()[0]);
                 String reqlevel = skillsRow.get("reqlevel");
-                try {
-                    if (iReqLvl < Integer.parseInt(reqlevel)) {
-                        iReqLvl = (Integer.parseInt(reqlevel));
+                if (!reqlevel.equals("")) {
+                    try {
+                        if (iReqLvl < Integer.parseInt(reqlevel)) {
+                            iReqLvl = (Integer.parseInt(reqlevel));
+                        }
+                    } catch (NumberFormatException e) {
+                        System.err.println("Failed to parse level req number for " + skillsRow.get("skill"));
                     }
-                } catch (NumberFormatException e) {
-                    System.err.println("Failed to parse level req number for " + skillsRow.get("skill"));
                 }
             }
 
