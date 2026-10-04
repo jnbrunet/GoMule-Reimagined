@@ -218,7 +218,9 @@ jobs:
         # nothing behind and the next push simply reuses the same BB.
         run: |
           $ErrorActionPreference = 'Stop'
-          $assets = Get-ChildItem dist/*.zip | ForEach-Object { $_.FullName }
+          # @() is load-bearing: with a single zip the pipeline yields a bare string, and splatting
+          # a string passes it character by character ("no matches found for `D`").
+          $assets = @(Get-ChildItem dist/*.zip | ForEach-Object { $_.FullName })
 
           # --notes-file and --generate-notes are mutually exclusive, so pick one: the curated
           # changelog entries when there are any, the generated commit list otherwise.
