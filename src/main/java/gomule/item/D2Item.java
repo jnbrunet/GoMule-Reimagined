@@ -477,7 +477,7 @@ public class D2Item implements Comparable, D2ItemInterface {
             // (uid 146) with "Heaven Facet" jewels socketed in -- exposed the difference: its facets
             // only decoded, and the ~110 items after it only parsed, once these bits were skipped here
             // instead of after the socket loop. The amount is exactly the same as that trailing skip
-            // (see hasElementalSkillProperty()); the trailing skip itself is suppressed for socketed
+            // (see flag29BlobLength()); the trailing skip itself is suppressed for socketed
             // items (its iSocketNrFilled == 0 guard) so the bits are never counted twice. Confirmed
             // against three copies of that scepter in one character -- socketed with jewels, with
             // empty sockets, and un-socketed -- whose trailing blobs are byte-for-byte the same
@@ -779,10 +779,9 @@ public class D2Item implements Comparable, D2ItemInterface {
         // inventories and a real shared stash: every elemental Facet (isElementalFacet()) has it set,
         // and so do a unique ring ("Sling"), unique gauntlets ("Steelrend") and a unique scepter
         // ("Hand of Blessed Light"). Facets get their own, different (48-bit) skip above; the rest
-        // carry a trailing blob of 52 bits, or 56 when the item grants an elemental-skill bonus (see
-        // hasElementalSkillProperty() for the full evidence and why the amount is keyed on
-        // item_elemskill rather than the properties.txt func number). What the blob holds is still
-        // unknown; this is a length heuristic, not a decode.
+        // carry a trailing blob of 52 bits, plus 64 more when the blob flags an extra record (see
+        // flag29BlobLength()). What the blob holds is still unknown; this is a length heuristic, not
+        // a decode.
         // Only for items with NO socketed sub-items: when a flag-29 item is actually socketed, these
         // same bits appear BEFORE its sockets instead and are skipped up in the socket loop (see the
         // "Hand of Blessed Light" comment there), so counting them again here would double-skip.
@@ -800,8 +799,7 @@ public class D2Item implements Comparable, D2ItemInterface {
      * How many bits the flag-29 trailing blob occupies, starting at pFile's current position (which
      * this leaves exactly where it found it -- it only peeks).
      * <p>
-     * The blob's core is 52 bits, or 56 when the item grants an elemental-skill bonus (see
-     * hasElementalSkillProperty()). Some items carry a further 64 bits on top of that, and the blob
+     * The blob's core is 52 bits. Some items carry a further 64 bits on top of that, and the blob
      * says so itself: dumping the raw bits of every flag-29 item across the real fixture characters
      * shows a fixed shape -- 32 bits of per-item value, then the constant byte 11000111, then seven
      * zero bits, then ONE bit that is 0 on every item whose blob is just the core and 1 on every
@@ -821,6 +819,17 @@ public class D2Item implements Comparable, D2ItemInterface {
      * blob's own bit covers both, needs no guess about which stats lengthen it, and keeps Opalvein
      * decoding exactly as before (its bit is set).
      * <p>
+     * The core used to be 56 bits instead of 52 for an item granting an elemental-skill bonus
+     * (properties.txt fireskill/coldskill/.../magicskill, i.e. the item_elemskill stat), drawn from
+     * Sling (magicskill) needing "56". It never did: the blob is followed by byte-rounding, so 52
+     * and 56 land on the same byte unless the blob starts at bit 1-4 of a byte, and every Sling and
+     * Nature's Peace in the fixtures starts at bit 0, 5, 6 or 7 -- the evidence fit both amounts.
+     * The first elemskill item to start inside that window, a unique amulet "Crescent Moon"
+     * (coldskill, uid 271, hgMisc.d2s) whose blob starts at bit 1, needs 52: at 56 it read one byte
+     * long and all 37 items after it failed, at 52 the next item is "Entropy Locket" and the whole
+     * file parses. Its blob also has exactly the same shape as the 52-bit ones (Carrion Wind,
+     * Mara's Kaleidoscope), with nothing in the four extra bits.
+     * <p>
      * What the blob holds is still unknown -- this is a length rule, not a decode. Reading past the
      * end of the file is safe: D2BitReader.read() pads with zeroes there, which reads as "core
      * length only", the conservative answer.
@@ -830,7 +839,7 @@ public class D2Item implements Comparable, D2ItemInterface {
         pFile.set_pos(lBlobStart + FLAG29_EXTRA_RECORD_BIT);
         boolean lHasExtraRecord = pFile.read(1) == 1;
         pFile.set_pos(lBlobStart);
-        return (hasElementalSkillProperty() ? 56 : 52) + (lHasExtraRecord ? 64 : 0);
+        return 52 + (lHasExtraRecord ? 64 : 0);
     }
 
     private void readExtend1(D2BitReader pFile) throws Exception {
@@ -961,7 +970,7 @@ public class D2Item implements Comparable, D2ItemInterface {
                 D2TxtFileItemProperties lSet = D2TxtFile.SETITEMS.searchColumns("*ID", String.valueOf(set_id));
                 iSetItemRow = lSet;
                 String nameFromSetFile = lSet.get("index");
-                String translatedName = D2Files.getInstance().getTranslations().getTranslation(nameFromSetFile);
+                String translatedName = D2Files.getInstance().getTranslations().getTranslationOrNull(nameFromSetFile, "");
                 iItemName = translatedName == null ? nameFromSetFile : translatedName;
                 iSetName = lSet.get("set");
 
@@ -987,10 +996,12 @@ public class D2Item implements Comparable, D2ItemInterface {
 
                 D2TxtFileItemProperties lUnique = D2TxtFile.UNIQUES.searchByID(unique_id);
                 if (lUnique == null) break;
-                String lNewName = D2Files.getInstance().getTranslations().getTranslation(lUnique.get("index"));
-                if (lNewName != null) {
-                    iItemName = lNewName;
-                }
+                // getTranslationOrNull, not getTranslation: a unique newer than the bundled string
+                // tables (e.g. "Enfeeblement Arrows", uid 1479, added by the mod after the last
+                // translations sync) used to throw here and abort the whole character load. Fall
+                // back to the uniqueitems.txt index, which is the English name for this mod.
+                String lNewName = D2Files.getInstance().getTranslations().getTranslationOrNull(lUnique.get("index"), "");
+                iItemName = lNewName != null ? lNewName : lUnique.get("index");
 
                 if (s.equals("") && !lUnique.get("invfile").equals("")) image_file = lUnique.get("invfile");
 
@@ -1146,46 +1157,6 @@ public class D2Item implements Comparable, D2ItemInterface {
         } finally {
             pFile.set_pos(lSavedPos);
         }
-    }
-
-    // The flag-29 trailing skill blob is 4 bits longer for an item that grants an "elemental skill"
-    // bonus -- properties.txt's fireskill/coldskill/lightningskill/poisonskill/magicskill, all of
-    // which resolve to the item_elemskill stat -- than for one that only grants named/fixed skills
-    // (oskill, aura, single skill, +class skills, skill tab). Both an elemental-skill property and a
-    // +class-skills property (item_addclassskills, e.g. "pal"/"dru") happen to share properties.txt
-    // func1 == 21 in this mod's data, so keying on func 21 (as this originally did) wrongly gave the
-    // extra 4 bits to +class-skills items too. Real examples pin the rule to item_elemskill, not
-    // func 21: a unique ring "Sling" (a magicskill/item_elemskill item) needs 56, while a unique
-    // scepter "Hand of Blessed Light" (+2 Paladin skills via item_addclassskills, plus single-skill,
-    // oskill and chance-to-cast grants, but no item_elemskill) needs 52 -- confirmed three ways from
-    // three copies of that scepter in one character (socketed with jewels, with empty sockets, and
-    // un-socketed), all of which decoded and let the rest of the file parse only at 52, not 56, and
-    // whose trailing blobs are byte-for-byte the same structure regardless of sockets. A unique pair
-    // of gauntlets "Steelrend" (item_aura, no item_elemskill) is the other confirmed 52. Checks every
-    // property slot this item's recipe (unique or set) could use; uniqueitems.txt goes up to prop12,
-    // setitems.txt up to prop9 plus the five threshold slots' "a"/"b" pairs. What the 4 bits hold is
-    // still unknown; this stays a length heuristic, not a decode of the blob.
-    private boolean hasElementalSkillProperty() {
-        D2TxtFileItemProperties recipeRow = iUnique
-                ? D2TxtFile.UNIQUES.searchByID(unique_id)
-                : (iSet ? iSetItemRow : null);
-        if (recipeRow == null) return false;
-        for (int x = 1; x <= 12; x++) {
-            if (propertyGrantsElementalSkill(recipeRow.get("prop" + x))) return true;
-        }
-        if (iSet) {
-            for (int x = 1; x <= 5; x++) {
-                if (propertyGrantsElementalSkill(recipeRow.get("aprop" + x + "a"))) return true;
-                if (propertyGrantsElementalSkill(recipeRow.get("aprop" + x + "b"))) return true;
-            }
-        }
-        return false;
-    }
-
-    private boolean propertyGrantsElementalSkill(String pPropertyCode) {
-        if (pPropertyCode.equals("")) return false;
-        D2TxtFileItemProperties propRow = D2TxtFile.PROPS.searchColumns("code", pPropertyCode);
-        return propRow != null && "item_elemskill".equals(propRow.get("stat1"));
     }
 
     private void addSetProperties(D2TxtFileItemProperties fullsetRow) {

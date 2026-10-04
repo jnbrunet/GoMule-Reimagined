@@ -830,4 +830,42 @@ public class D2CharacterTest {
                 "Horadric Cube still parses untouched");
     }
 
+    // A unique amulet "Crescent Moon" (uid 271) grants +3 to Cold Skills -- an item_elemskill
+    // property, which the flag-29 blob rule used to give 56 bits instead of 52. Its blob starts at
+    // bit 1 of a byte, one of the offsets where 52 and 56 round to different bytes, so the old rule
+    // read it one byte long and items 10-46 all failed. At 52 the next item is "Entropy Locket".
+    @Test
+    public void elementalSkillAmuletUsesTheCoreFlag29BlobLength() throws Exception {
+        D2TxtFile.constructTxtFiles("./d2111");
+        D2Character d2Character = new D2Character(
+                new File(Resources.getResource("charFiles/hgMisc.d2s").toURI()).getAbsolutePath());
+
+        assertFalse(d2Character.isItemsIncomplete(), d2Character.getItemsIncompleteReason());
+        assertEquals(46, d2Character.getItemList().size());
+
+        List<D2Item> items = d2Character.getItemList();
+        assertEquals("Crescent Moon", items.get(8).getItemName());
+        // The items right after it are what the extra byte used to destroy.
+        assertEquals("Entropy Locket", items.get(9).getItemName());
+        assertEquals("Manald Heal", items.get(10).getItemName());
+        assertEquals("Horadric Cube", items.get(43).getItemName());
+    }
+
+    // A unique quiver "Enfeeblement Arrows" (uid 1479) that the bundled translations didn't know
+    // yet threw "No translation for Enfeeblement Arrows" and aborted the whole character load.
+    @Test
+    public void bowCharacterWithRecentUniqueQuiverParsesFully() throws Exception {
+        D2TxtFile.constructTxtFiles("./d2111");
+        D2Character d2Character = new D2Character(
+                new File(Resources.getResource("charFiles/hgBow.d2s").toURI()).getAbsolutePath());
+
+        assertFalse(d2Character.isItemsIncomplete(), d2Character.getItemsIncompleteReason());
+        assertEquals(64, d2Character.getItemList().size());
+
+        List<D2Item> items = d2Character.getItemList();
+        assertEquals("Enfeeblement Arrows", items.get(54).getItemName());
+        assertEquals("Quiver of Slaying", items.get(55).getItemName());
+        assertEquals("Arrows of Piercing", items.get(63).getItemName());
+    }
+
 }

@@ -16,6 +16,18 @@
   notes. They are served from docs/screenshots/ on main.
 -->
 
+### Characters that would not load
+
+- **Items from the latest Reimagined update are recognised.** GoMule's copy of the mod's tables and
+  item names is back in step with the installed mod. A character holding one of the new uniques,
+  such as the "Enfeeblement Arrows" quiver, used to refuse to open with "No translation for …".
+  If a future item is still missing a name, it now shows its plain English name and the rest of
+  the character loads normally.
+- **Amulets, rings and other items that grant + to an elemental skill tree no longer stop the
+  load.** A "Crescent Moon" amulet (+3 to Cold Skills) was read one byte too long, so every item
+  after it was lost. Depending on where it sat in the save, this affected any skill-granting item
+  with a +Fire/Cold/Lightning/Poison/Magic Skills bonus.
+
 ### Projects
 
 - **Projects now live under `%APPDATA%\GoMule-Reimagined`**, not next to the GoMule executable —

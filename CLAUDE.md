@@ -73,7 +73,10 @@ trailing bits than the parser accounts for." Everything is gated on
   padding, so never blanket-apply it.
 - **Fixed extra trailing bits per item class.** Some codes/categories carry a constant blob
   nothing above reads: `rvl` +8, `rvs` +16, `elix` +8, Worldstone Shards (`xa1`–`xa5`) +8,
-  elemental Facets +48, the flag-29 skill blob +52 (or +56 with an `item_elemskill` bonus).
+  elemental Facets +48, the flag-29 skill blob +52 (+64 more when its bit 47 is set). There is
+  no +56 `item_elemskill` variant — that old rule fit only because byte-rounding hides a 4-bit
+  difference unless the blob starts at bit 1–4 of a byte (Crescent Moon disproved it). When
+  confirming an amount, check the start offset actually **discriminates** between candidates.
 - **Placement: socketed items put trailing data BEFORE the sockets.** Sockets are always last
   in the item body, so a socketed flag-29 item's skill blob is skipped *before* the socket
   loop, not after (the after-socket skip is guarded by `iSocketNrFilled == 0`).
