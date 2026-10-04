@@ -146,12 +146,9 @@ jobs:
         shell: pwsh
         run: .\gradlew.bat clean build --no-daemon --stacktrace
 
-      - name: Build the classic jar distribution
-        shell: pwsh
-        # The lightweight (~12 MB) zip for users who already have a JRE. appVersion replaces the
-        # version that used to be hard-coded in build.gradle's archiveName.
-        run: .\gradlew.bat distribution --no-daemon "-PappVersion=${{ steps.version.outputs.version }}"
-
+      # Only the self-contained _windows zip is published. The lightweight jar-only zip (the
+      # `distribution` Gradle task) used to ship alongside it, but two near-identical downloads just
+      # made users guess; it can still be built locally for anyone who already has a JRE.
       - name: Package the self-contained Windows application
         shell: pwsh
         env:
@@ -208,7 +205,6 @@ jobs:
 
           New-Item -ItemType Directory -Force dist | Out-Null
           Compress-Archive -Path $image -DestinationPath "dist/GoMule_Reimagined_${env:VERSION}_windows.zip"
-          Copy-Item build/distributions/*.zip dist/
 
           Get-ChildItem dist | ForEach-Object { '{0}  {1:N0} MB' -f $_.Name, ($_.Length / 1MB) }
 

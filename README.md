@@ -12,20 +12,14 @@ Get D2R Reimagined here: https://www.nexusmods.com/diablo2resurrected/mods/503
 Go to the release page: https://github.com/jnbrunet/GoMule-Reimagined/releases
 
 Releases are named `YYYY.MM.BB` — year, month, and the build number within that month — and each
-one ships two archives:
-
-| Archive | Size | Java required? |
-|---|---|---|
-| `GoMule_Reimagined_<version>_windows.zip` | ~44 MB | **No** — a Java runtime is bundled |
-| `GoMule_Reimagined_<version>.zip` | ~11 MB | Yes — needs a JRE already installed |
+one ships a single archive, `GoMule_Reimagined_<version>_windows.zip` (~44 MB), with a Java runtime
+bundled: nothing else to install.
 
 ### Older releases from the upstream fork
 ⮕ [2.1.2](https://github.com/Cjreek/GoMule-Reimagined/releases/download/gomule_reimagined_212/GoMule_Reimagined_2.1.2.zip)  
 ⮕ [2.1.1](https://github.com/Cjreek/GoMule-Reimagined/releases/download/gomule_reimagined_211/GoMule_Reimagined_2.1.1.zip)  
 
 ## Installation
-
-Using `GoMule_Reimagined_<version>_windows.zip` (recommended, nothing else to install):
 
 1) Extract the .zip anywhere you have write access — your Desktop or Documents is fine.
 2) Double-click `GoMule.exe` inside the extracted `GoMule` folder.
@@ -38,10 +32,8 @@ Note that `GoMule.exe` finds its data files (`d2111\`, `resources\`, …) relati
 started from, so launch it from its own folder rather than from a shortcut with a different
 "Start in" directory.
 
-Using `GoMule_Reimagined_<version>.zip` (smaller, but you need a Java runtime installed):
-
-1) Extract the contents of the .zip file.
-2) Run `GoMule.bat`.
+If you already have a Java runtime and prefer the lightweight jar, build it yourself with the
+`distribution` Gradle task (see below) and run `GoMule.bat`.
 
 ## Your projects
 

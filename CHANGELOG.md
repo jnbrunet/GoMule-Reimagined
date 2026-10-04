@@ -28,6 +28,11 @@
   after it was lost. Depending on where it sat in the save, this affected any skill-granting item
   with a +Fire/Cold/Lightning/Poison/Magic Skills bonus.
 
+### Packaging
+
+- Releases now ship a single download, `GoMule_Reimagined_<version>_windows.zip`, with Java
+  bundled. The separate jar-only zip is no longer published.
+
 ### Projects
 
 - **Projects now live under `%APPDATA%\GoMule-Reimagined`**, not next to the GoMule executable —
