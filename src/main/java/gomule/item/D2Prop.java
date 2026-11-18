@@ -478,6 +478,16 @@ public class D2Prop {
                 }
                 D2TxtFileItemProperties o = matchingPropsRecords.get(0);
                 String tooltip = o.get("*Tooltip");
+                // "*Tooltip" is a comment column, and the mod doesn't fill it in for every row. The
+                // four percent-attribute properties added with the Brak/Zeph/Myr/Grit runes on
+                // 2026-11-03 (str%, dex%, vit%, enr% -> item_strength_percent and friends) leave it
+                // blank, so every socketed bonus they give rendered as an empty line (Unity's whole
+                // "In Armor"/"In a Shield" block). Their stat's own descstrpos string is the real
+                // one ("%+d%% to Strength"), so use that, the same way as the no-record branch above.
+                if (tooltip.isEmpty() && oString != null) {
+                    int lValue = pVals.length == 3 ? pVals[0] : pVals[pVals.length - 1];
+                    return oString.replaceAll("%\\+d", (lValue < 0 ? "" : "+") + lValue).replace("%%", "%");
+                }
                 String value = tooltip.replace("#", String.valueOf(pVals[0]));
                 if (pVals[0] < 0) {
                     return value.replace("+", "");

@@ -252,7 +252,7 @@ public final class D2GrailModel {
     }
 
     /**
-     * Which runes the player has, as rune numbers 1..33 ("which runewords can I make?"). An EMPTY
+     * Which runes the player has, as rune numbers 1..D2GrailRunewords.runeCount() ("which runewords can I make?"). An EMPTY
      * selection means the filter is off entirely -- every runeword is listed -- rather than "no
      * runes, so nothing matches", which would leave the tab looking broken until the first click.
      * <p>

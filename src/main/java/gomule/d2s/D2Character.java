@@ -519,7 +519,7 @@ public class D2Character extends D2ItemListAdapter {
         for (int i = 0; i < num_items; i++) {
             int lItemStart = iReader.findNextFlag("JM", lLastItemEnd);
             if (lItemStart == -1) throw new Exception("Corpse item " + (i + 1) + " not found.");
-            D2Item lItem = new D2Item(iFileName, iReader, iCharLevel);
+            D2Item lItem = D2Item.readItem(iFileName, iReader, iCharLevel, i + 1 < num_items);
             lLastItemEnd = lItemStart + lItem.getItemLength();
             if (lItem.isCursorItem()) {
                 if (iCharCursorItem != null) throw new Exception("Double cursor item found");
@@ -544,7 +544,7 @@ public class D2Character extends D2ItemListAdapter {
             int lItemStart = iReader.get_byte_pos();
             D2Item lItem;
             try {
-                lItem = new D2Item(iFileName, iReader, iCharLevel);
+                lItem = D2Item.readItem(iFileName, iReader, iCharLevel, i + 1 < num_items);
             } catch (Exception pEx) {
                 // An item partway through the list failed to parse -- there is no reliable way
                 // to skip just this one and resync on the next, since each item's length is only
@@ -582,7 +582,7 @@ public class D2Character extends D2ItemListAdapter {
                 if (lItemStart == -1) throw new Exception("Merc item " + (i + 1) + " not found.");
                 D2Item lItem;
                 try {
-                    lItem = new D2Item(iFileName, iReader, iCharLevel);
+                    lItem = D2Item.readItem(iFileName, iReader, iCharLevel, i + 1 < num_items);
                 } catch (Exception pEx) {
                     // Same situation as the char-items loop above, just further into the file --
                     // all lCharItemsRead character items already read are still kept and shown.
@@ -639,7 +639,7 @@ public class D2Character extends D2ItemListAdapter {
             golemItem = null;
             return;
         }
-        golemItem = new D2Item(iFileName, iReader, iCharLevel);
+        golemItem = D2Item.readItem(iFileName, iReader, iCharLevel, false);
     }
 
     private void extractMercName(long bitsIn, D2TxtFileItemProperties hireCol) {

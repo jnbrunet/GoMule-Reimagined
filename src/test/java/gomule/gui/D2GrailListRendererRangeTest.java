@@ -100,8 +100,13 @@ public class D2GrailListRendererRangeTest {
      * never regress to "0" from the max-flavoured pass otherwise reading two blank columns
      * (propToStat(code, "", "", param, 0) resolves to a bare 0). See
      * D2GrailListRenderer.renderSlotsWithRanges's javadoc for the full normalization rationale.
-     * Verified empirically against the real row: today's (pre-feature) single-pass output is
-     * "Reduces all Vendor Prices 10%", so that is what must survive unchanged.
+     * Verified empirically against the real row: the (pre-feature) single-pass output was
+     * "Reduces all Vendor Prices 10%".
+     * <p>
+     * The 2026-11-03 mod update rewrote that row as a real range (min8=-10, max8=10, no par), and
+     * no range-eligible blank-max slot is left anywhere in uniqueitems.txt (the only blank max is
+     * a per-level "ac/lvl", which never ranges). So this now pins the row's new real range, and
+     * still that neither pass collapses to a bare 0.
      */
     @Test
     public void gheedsWagerBlankMaxColumnStillShowsItsRealValue() {
@@ -110,8 +115,8 @@ public class D2GrailListRendererRangeTest {
         String lTooltip = D2GrailListRenderer.tooltipFor(rowOf(lGheedsWager), null);
 
         assertNotNull(lTooltip);
-        assertTrue(lTooltip.contains("Reduces all Vendor Prices 10%"),
-                "Gheed's Wager's real \"cheap\" (10, blank max) must not regress to 0%: " + lTooltip);
+        assertTrue(lTooltip.contains("Reduces all Vendor Prices -10 to 10%"),
+                "Gheed's Wager's real \"cheap\" (-10 to 10) must render as its range: " + lTooltip);
         assertFalse(lTooltip.contains("Reduces all Vendor Prices 0%"), lTooltip);
     }
 

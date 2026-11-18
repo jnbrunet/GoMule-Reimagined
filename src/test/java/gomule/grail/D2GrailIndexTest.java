@@ -34,6 +34,12 @@ public class D2GrailIndexTest {
      * other to axes/polearms/clubs/hammers/maces -- which D2GrailIndex deliberately collapses into
      * a single entry (see buildRunewords's dedup comment), making the real runeword total 208, not
      * 209.
+     * <p>
+     * The 2026-11-03 mod update added one unique ("Relic of the Ancients") and eight runewords
+     * (Chromaskin, Insanity, Offering, Ravage, Shatter, Solace, Spark, Unity), and split two more
+     * existing ones (Leaf, Snowdrop) and the new Spark across two rows the same way as Doom: 220
+     * complete=1 rows, 4 names twice, 216 entries. It also gave the five section-header rows a
+     * "*ID" of their own -- see D2GrailIndex for how they are still told apart from real items.
      */
     @Test
     public void countsMatchWhatTheRealDataActuallyContains() {
@@ -63,16 +69,16 @@ public class D2GrailIndexTest {
             }
         }
 
-        assertEquals(1471, lUniques,
-                "total usable unique entries (1483 rows - 7 disabled - 5 blank-*ID section-header rows)");
+        assertEquals(1472, lUniques,
+                "total usable unique entries (1484 rows - 7 disabled - 5 section-header rows)");
         assertEquals(419, lUniquesChronicle, "unique entries with chronicle=true");
 
         assertEquals(455, lSets, "total usable set-item entries");
         assertEquals(135, lSetsChronicle, "set-item entries with chronicle=true");
 
-        assertEquals(208, lRunewords, "total distinct runeword entries (209 complete=1 rows, minus "
-                + "the 'Doom'/'Doom1' pair collapsed into one entry)");
-        assertEquals(208, lRunewordsChronicle, "runewords are always chronicle=true -- runes.txt "
+        assertEquals(216, lRunewords, "total distinct runeword entries (220 complete=1 rows, minus "
+                + "the Doom/Leaf/Snowdrop/Spark pairs each collapsed into one entry)");
+        assertEquals(216, lRunewordsChronicle, "runewords are always chronicle=true -- runes.txt "
                 + "has no disableChronicle column");
     }
 

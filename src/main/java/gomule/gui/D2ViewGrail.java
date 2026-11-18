@@ -365,7 +365,7 @@ public class D2ViewGrail extends JInternalFrame implements D2ItemContainer, D2It
      * switch. Shown only on that tab (see onTabChanged) -- a unique or set item is not made of
      * runes, so the panel is hidden rather than greyed out there: unlike the tier checkboxes, which
      * stay visible because they DO apply to two of the three tabs, this one applies to exactly one
-     * and would be 33 dead controls everywhere else.
+     * and would be a few dozen dead controls everywhere else.
      * <p>
      * Nothing selected means the filter is off and every runeword is listed -- see
      * D2GrailModel.setSelectedRunes -- so the panel starts empty rather than fully ticked.
@@ -376,7 +376,7 @@ public class D2ViewGrail extends JInternalFrame implements D2ItemContainer, D2It
 
         JPanel lGrid = new JPanel(new GridLayout(3, 11, 2, 2));
         ActionListener lRuneListener = pEvent -> onRuneSelectionChanged();
-        for (int lRune = 1; lRune <= D2GrailRunewords.RUNE_COUNT; lRune++) {
+        for (int lRune = 1; lRune <= D2GrailRunewords.runeCount(); lRune++) {
             JToggleButton lButton = new JToggleButton(D2GrailRunewords.runeShortName(lRune) + " " + lRune);
             lButton.setMargin(new Insets(1, 2, 1, 2));
             lButton.setToolTipText(D2GrailRunewords.runeShortName(lRune) + " Rune (#" + lRune + ")");

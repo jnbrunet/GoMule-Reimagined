@@ -35,7 +35,7 @@ public class D2GrailModelTest {
         assertEquals(419, lModel.getTabProgress().getTotal(), "default scope is Chronicle-only");
 
         lModel.setIncludeNonChronicle(true);
-        assertEquals(1471, lModel.getTabProgress().getTotal(), "checked scope is the whole table");
+        assertEquals(1472, lModel.getTabProgress().getTotal(), "checked scope is the whole table");
 
         // The load-bearing assertion: toggling the checkbox must not have replaced (or touched)
         // the findings map -- see D2GrailModel.setIncludeNonChronicle's javadoc. Same reference,
@@ -86,7 +86,7 @@ public class D2GrailModelTest {
         // Every runeword is Tier.NONE, which is not any of the three checkboxes -- if this model
         // applied the tier filter uniformly across tabs, unchecking all three would (wrongly) hide
         // every runeword. It must not.
-        assertEquals(208, lModel.getTabProgress().getTotal());
+        assertEquals(216, lModel.getTabProgress().getTotal());
     }
 
     @Test

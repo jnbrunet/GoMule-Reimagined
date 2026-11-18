@@ -13,13 +13,19 @@ public class D2SharedStashReader {
 
     static final byte[] STASH_HEADER_START = BaseEncoding.base16().decode("55AA55AA");
 
+    // A sanity bound on the marker scan, not a format limit. It was 7 (the classic layout) until
+    // the 2026-11-03 update: the game then wrote the live stash with 17 panes (ten new ordinary
+    // tabs after the stackable one), and "> 7" rejected the whole file. See
+    // D2SharedStash.getTabPaneIndices() for how they are shown.
+    static final int MAX_PANES = 32;
+
     public D2SharedStash readStash(String filename) throws Exception {
         return readStash(filename, new D2BitReader(filename));
     }
 
     public D2SharedStash readStash(String filename, D2BitReader bitReader) throws Exception {
         int[] stashHeaderOffsets = bitReader.findBytes(STASH_HEADER_START);
-        if (stashHeaderOffsets.length > 7) throw new RuntimeException("Stash unsupported");
+        if (stashHeaderOffsets.length > D2SharedStashReader.MAX_PANES) throw new RuntimeException("Stash unsupported");
         byte[] fileContent = bitReader.getFileContent();
         List<D2SharedStashPane> result = new ArrayList<>();
         for (int paneIndex = 0; paneIndex < stashHeaderOffsets.length; paneIndex++) {
@@ -79,7 +85,7 @@ public class D2SharedStashReader {
         // successfully. Keep everything read so far in this pane and stop.
         for (int i = 0; i < numItems; i++) {
             try {
-                result.add(new D2Item(filename, bitReader, 75));
+                result.add(D2Item.readItem(filename, bitReader, 75, i + 1 < numItems));
             } catch (Exception pEx) {
                 String reason = "Item " + (i + 1) + " of " + numItems + " failed to parse: " + pEx;
                 try {

@@ -139,8 +139,9 @@ public class D2GrailListRendererRunewordTest {
         assertFalse(lTooltip.contains("Sorceress Only"), lTooltip);
         assertTrue(lTooltip.contains("Repairs 1 Durability in 4 Seconds"), lTooltip);
         assertTrue(lTooltip.contains("Level 13-16 Defiance Aura When Equipped"), lTooltip);
-        // Vex/Ohm/Ist/Dol in an auric shield: Dol's shieldMod is "Replenish Life +7".
-        assertTrue(lTooltip.contains("Replenish Life +7"), lTooltip);
+        // Vex/Ohm/Ist/Dol in an auric shield: Dol's shieldMod is "+25 to Mana" (it was
+        // "Replenish Life +7" until the 2026-11-03 mod update).
+        assertTrue(lTooltip.contains("+25 to Mana"), lTooltip);
     }
 
     /**
@@ -173,7 +174,7 @@ public class D2GrailListRendererRunewordTest {
             assertFalse(lTooltip.contains("<font color=\"#4850b8\"></font>"),
                     lName + " rendered no properties at all: " + lTooltip);
         }
-        assertEquals(208, lChecked, "every complete runeword in ./d2111");
+        assertEquals(216, lChecked, "every complete runeword in ./d2111");
     }
 
     private static String tooltipOf(String pDisplayName) {

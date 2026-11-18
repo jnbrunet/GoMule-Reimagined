@@ -313,8 +313,10 @@ public class D2GrailListRendererTest {
         String lTooltip = D2GrailListRenderer.tooltipFor(rowOf(lSchaefers, null), null);
 
         assertNotNull(lTooltip);
-        assertTrue(lTooltip.contains("10% Chance to cast level 10 Static Field on striking"),
-                "prop1 hit-skill must render the mod site's own line: " + lTooltip);
+        // prop1 was "hit-skill" ("... on striking") until the 2026-11-03 mod update made it
+        // "att-skill"; both go through the same chance/level slot shape.
+        assertTrue(lTooltip.contains("10% Chance to cast level 10 Static Field on attack"),
+                "prop1 att-skill must render the mod site's own line: " + lTooltip);
         assertFalse(lTooltip.contains("10-10"), "chance and skill level are not a range: " + lTooltip);
         // The rest of the item must be untouched by the new property -- these are the lines the
         // tooltip already showed correctly before the fix.

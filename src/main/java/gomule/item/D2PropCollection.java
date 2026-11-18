@@ -400,11 +400,24 @@ public class D2PropCollection extends ArrayList {
 
     public void readProp(D2BitReader pFile, int rootProp, int qFlag) {
 
+        // See D2PreUpdateStatWidths: the 2026-11-03 mod update re-encoded a few stats.
+        int[] preUpdateWidth = null;
+        if (D2PreUpdateStatWidths.isChangedStat(rootProp)) {
+            D2PreUpdateStatWidths.sChangedStatRead = true;
+            if (D2PreUpdateStatWidths.sActive) {
+                preUpdateWidth = D2PreUpdateStatWidths.saveBitsAndAdd(rootProp);
+                rootProp = D2PreUpdateStatWidths.currentStatId(rootProp);
+            }
+        }
         D2TxtFileItemProperties pRow = D2TxtFile.ITEM_STAT_COST.getRow(rootProp);
         int readLength = Integer.parseInt(pRow.get("Save Bits"));
         int saveAdd = 0;
         if (!pRow.get("Save Add").equals("")) {
             saveAdd = Integer.parseInt(pRow.get("Save Add"));
+        }
+        if (preUpdateWidth != null) {
+            readLength = preUpdateWidth[0];
+            saveAdd = preUpdateWidth[1];
         }
         if (rootProp == 201 || rootProp == 197 || rootProp == 199
                 || rootProp == 195 || rootProp == 198 || rootProp == 196) {

@@ -38,11 +38,57 @@ public class D2SharedStash extends D2ItemListAdapter {
     // so hiding a middle tab would leave a gap, and in every real file these converted tabs are the
     // last ones. At least one tab always stays visible, even in the degenerate all-incomplete case.
     public int getVisibleTabCount() {
-        int count = panes.size();
-        while (count > 1 && panes.get(count - 1).isIncomplete()) {
-            count--;
+        return getTabPaneIndices().size();
+    }
+
+    // Which panes are shown as tabs, in tab order: tab N shows pane getTabPaneIndices().get(N).
+    //
+    // Each pane header carries a type at byte 20: 0 for an ordinary tab, 1 for the DLC's stackable
+    // rune/gem tab, 2 for the trailing pane with no item list -- the same in every real file here.
+    // Only type 0 panes are tabs. Until 2026-11-03 the two special panes were always the last two,
+    // so hiding a trailing run of incomplete panes (the rule below) came to the same thing. Then the
+    // game added ten more ordinary (empty) shared tabs, and wrote them AFTER the stackable pane:
+    // 17 panes, types 0 x5, 1, 0 x10, 2. Positional hiding can't express that, the type can. When
+    // the types can't be read (a stash built in memory, with no file bytes), the old rule applies.
+    public List<Integer> getTabPaneIndices() {
+        List<Integer> lTabs = new ArrayList<>();
+        int[] lTypes = paneTypes();
+        if (lTypes != null) {
+            for (int i = 0; i < lTypes.length; i++) {
+                if (lTypes[i] == 0) lTabs.add(i);
+            }
         }
-        return count;
+        if (lTabs.isEmpty()) {
+            int count = panes.size();
+            while (count > 1 && panes.get(count - 1).isIncomplete()) {
+                count--;
+            }
+            for (int i = 0; i < count; i++) lTabs.add(i);
+        }
+        return lTabs;
+    }
+
+    // The header type of each pane, read from the file bytes, or null when they don't line up with
+    // the panes (e.g. no file bytes at all).
+    private int[] paneTypes() {
+        if (originalContent == null) return null;
+        List<Integer> lOffsets = new ArrayList<>();
+        byte[] lMarker = D2SharedStashReader.STASH_HEADER_START;
+        for (int i = 0; i + lMarker.length <= originalContent.length; i++) {
+            if (originalContent[i] == lMarker[0] && originalContent[i + 1] == lMarker[1]
+                    && originalContent[i + 2] == lMarker[2] && originalContent[i + 3] == lMarker[3]) {
+                lOffsets.add(i);
+            }
+        }
+        if (lOffsets.size() != panes.size()) return null;
+        int[] lTypes = new int[lOffsets.size()];
+        for (int i = 0; i < lTypes.length; i++) {
+            int lAt = lOffsets.get(i) + 20;
+            if (lAt + 4 > originalContent.length) return null;
+            lTypes[i] = (originalContent[lAt] & 0xff) | (originalContent[lAt + 1] & 0xff) << 8
+                    | (originalContent[lAt + 2] & 0xff) << 16 | (originalContent[lAt + 3] & 0xff) << 24;
+        }
+        return lTypes;
     }
 
     // True only when a *visible* tab failed to load -- a genuine partial-load problem worth warning
@@ -51,17 +97,14 @@ public class D2SharedStash extends D2ItemListAdapter {
     // remains the raw-data truth (any pane incomplete) for callers like the reader tests and save
     // path that need it.
     public boolean hasVisibleIncompletePane() {
-        int visible = getVisibleTabCount();
-        for (int i = 0; i < visible; i++) {
-            if (panes.get(i).isIncomplete()) return true;
-        }
-        return false;
+        return getTabPaneIndices().stream().anyMatch(i -> panes.get(i).isIncomplete());
     }
 
     // The reasons behind hasVisibleIncompletePane(), for the tooltip -- only the visible failures,
     // excluding the expected/hidden converted tabs that getItemsIncompleteReason() would include.
     public String getVisibleIncompleteReason() {
-        return panes.subList(0, getVisibleTabCount()).stream()
+        return getTabPaneIndices().stream()
+                .map(panes::get)
                 .filter(D2SharedStashPane::isIncomplete)
                 .map(D2SharedStashPane::getIncompleteReason)
                 .collect(Collectors.joining("; "));

@@ -29,8 +29,33 @@ public final class D2GrailRunewords {
     private D2GrailRunewords() {
     }
 
-    /** El (1) through Zod (33) -- runes.txt never references anything outside that range. */
-    public static final int RUNE_COUNT = 33;
+    /**
+     * The highest rune number any complete runeword is made of: the rune filter offers 1 through
+     * this. It was a fixed 33 (El through Zod) until the 2026-11-03 mod update added Brak (#34),
+     * Zeph, Myr and Grit (#37) and seven runewords made of them, which that fixed range could
+     * never select -- ticking every rune hid those seven. Derived from the table, like
+     * {@link #allBaseTypeLabels()}, and never below 33. Computed once.
+     */
+    public static synchronized int runeCount() {
+        if (sRuneCount > 0) {
+            return sRuneCount;
+        }
+        int lMax = 33;
+        int lRows = D2TxtFile.RUNES.getRowSize();
+        for (int i = 0; i < lRows; i++) {
+            D2TxtFileItemProperties lRow = D2TxtFile.RUNES.getRow(i);
+            if (!"1".equals(lRow.get("complete"))) {
+                continue;
+            }
+            for (String lCode : runeCodes(lRow)) {
+                lMax = Math.max(lMax, runeNumber(lCode));
+            }
+        }
+        sRuneCount = lMax;
+        return sRuneCount;
+    }
+
+    private static int sRuneCount = 0;
 
     /**
      * itemtypes.txt's own "ItemType" column is the label for every runeword base type except these

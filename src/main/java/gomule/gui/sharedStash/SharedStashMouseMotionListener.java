@@ -24,6 +24,9 @@ class SharedStashMouseMotionListener extends MouseMotionAdapter {
 
     @Override
     public void mouseMoved(MouseEvent e) {
+        // A stash that failed to load leaves the view disconnected; without this every mouse move
+        // over it threw a NullPointerException.
+        if (sharedStashPanel.getSharedStash() == null) return;
         if (isOnGoldButton(e.getX(), e.getY())) {
             sharedStashPanel.setCursorPickupItem();
             return;

@@ -238,9 +238,105 @@ public class D2Item implements Comparable, D2ItemInterface {
         } catch (D2ItemException pEx) {
             throw pEx;
         } catch (Exception pEx) {
-            pEx.printStackTrace();
+            if (!sTrialRead) pEx.printStackTrace();
             throw new D2ItemException("Error: " + pEx.getMessage() + getExStr());
         }
+        iPreUpdateStatWidths = D2PreUpdateStatWidths.sActive;
+    }
+
+    // Set while readItem() tries an encoding that may well be the wrong one, so that attempt's
+    // failure doesn't print a stack trace; a failure readItem() actually reports still does.
+    private static boolean sTrialRead = false;
+
+    private boolean iPreUpdateStatWidths = false;
+
+    // True when this item was stored with the stat encoding from before the 2026-11-03 mod update
+    // (see D2PreUpdateStatWidths).
+    public boolean usesPreUpdateStatWidths() {
+        return iPreUpdateStatWidths;
+    }
+
+    // Reads one top-level item of an item list; every item reader goes through this rather than
+    // the constructor. pMoreItemsFollow says whether another item of the same list starts where
+    // this one ends.
+    //
+    // An item that never reads one of the stats the 2026-11-03 mod update re-encoded decodes the
+    // same with either encoding, so it is read exactly once, as before. One that does is read with
+    // the current encoding and with the pre-update one (D2PreUpdateStatWidths), and the one that
+    // holds together is kept: if only one of them parses, that one; if both do, the one after
+    // which more of the following items decode in a row (a wrong width shifts every bit after it,
+    // so a wrong read that happens to terminate still leaves the next item starting in the wrong
+    // place), the current encoding winning a tie. If neither parses, the current-encoding read is repeated
+    // non-trial, so the failure is reported exactly as it always was.
+    public static D2Item readItem(String pFileName, D2BitReader pFile, long pCharLvl, boolean pMoreItemsFollow)
+            throws Exception {
+        int lStart = pFile.get_byte_pos();
+        TrialRead lCurrent = trialRead(pFileName, pFile, pCharLvl, lStart, false);
+        TrialRead lChosen = lCurrent;
+        if (lCurrent.iChangedStatRead) {
+            TrialRead lPreUpdate = trialRead(pFileName, pFile, pCharLvl, lStart, true);
+            if (lCurrent.iItem == null) {
+                lChosen = lPreUpdate;
+            } else if (lPreUpdate.iItem != null && pMoreItemsFollow
+                    && chainedItems(pFileName, pFile, pCharLvl, lPreUpdate.iEnd, LOOKAHEAD_ITEMS)
+                    > chainedItems(pFileName, pFile, pCharLvl, lCurrent.iEnd, LOOKAHEAD_ITEMS)) {
+                lChosen = lPreUpdate;
+            }
+        }
+        if (lChosen.iItem == null) {
+            pFile.set_byte_pos(lStart);
+            return new D2Item(pFileName, pFile, pCharLvl);
+        }
+        pFile.set_byte_pos(lChosen.iEnd);
+        return lChosen.iItem;
+    }
+
+    // How many items decode one after another from pStart, up to pMax. One item is not enough
+    // evidence: a wrongly placed start often still "parses", typically into a short garbage ear
+    // ("'s Ear"). Found in the real reimaginedCharms.d2x: after a wrong read of "Tancred's
+    // Crowbill" the next 9 bytes made such an ear, and only the item after that failed.
+    private static int chainedItems(String pFileName, D2BitReader pFile, long pCharLvl, int pStart, int pMax) {
+        int lCount = 0;
+        int lPos = pStart;
+        while (lCount < pMax) {
+            TrialRead lNext = trialRead(pFileName, pFile, pCharLvl, lPos, false);
+            if (lNext.iItem == null && lNext.iChangedStatRead) {
+                lNext = trialRead(pFileName, pFile, pCharLvl, lPos, true);
+            }
+            if (lNext.iItem == null) break;
+            lCount++;
+            lPos = lNext.iEnd;
+        }
+        return lCount;
+    }
+
+    private static final int LOOKAHEAD_ITEMS = 3;
+
+    private static TrialRead trialRead(String pFileName, D2BitReader pFile, long pCharLvl, int pStart,
+                                       boolean pPreUpdate) {
+        TrialRead lResult = new TrialRead();
+        pFile.set_byte_pos(pStart);
+        D2PreUpdateStatWidths.sActive = pPreUpdate;
+        D2PreUpdateStatWidths.sChangedStatRead = false;
+        sTrialRead = true;
+        try {
+            lResult.iItem = new D2Item(pFileName, pFile, pCharLvl);
+            lResult.iEnd = pFile.get_byte_pos();
+        } catch (Throwable pEx) {
+            // Includes the StackOverflowError a garbage socket count can recurse into.
+            lResult.iItem = null;
+        } finally {
+            lResult.iChangedStatRead = D2PreUpdateStatWidths.sChangedStatRead;
+            D2PreUpdateStatWidths.sActive = false;
+            sTrialRead = false;
+        }
+        return lResult;
+    }
+
+    private static final class TrialRead {
+        D2Item iItem;
+        int iEnd;
+        boolean iChangedStatRead;
     }
 
     // read basic information from the bytes
@@ -407,12 +503,37 @@ public class D2Item implements Comparable, D2ItemInterface {
             }
         }
 
+        // A compact quest item whose misc.txt "questdiffcheck" is set (Khalim's organs, the Act 3
+        // figurine/bird, Mephisto's Soulstone, ...) stores the 2-bit difficulty it was found in here,
+        // ahead of the GUID flag. Reading that flag 2 bits early went unnoticed for a long time: on a
+        // Normal item those bits are 00, so it read "no GUID", and the only damage was an item ending
+        // on a byte boundary coming out a byte short (a real "A Jade Figurine", which first looked like
+        // a dropped padding byte). A D2RLoader character (see below) has the real flag set, so its Jade
+        // Figurine read as 11 bytes rather than 27, 16 bytes being its unread GUID, and the 20 items
+        // after it were lost. With these 2 bits the flag is 1 and the GUID ends the item on the right
+        // byte, the next items being a real amulet, helm and Horadric Cube.
+        if (check_flag(22) && iTypeMisc && "1".equals(iItemType.get("questdiffcheck")) && usesPostV99ItemFormat()) {
+            pFile.skipBits(2);
+        }
+
         long lHasGUID = pFile.read(1);
 
+        // In the current format a set GUID flag is always followed by a full 128-bit GUID, misc
+        // items included. The 3-bit branch below is the legacy rule for older saves; no post-v99
+        // fixture or real save had ever exercised it: not one misc item in the fixtures here, nor in
+        // six other real characters of the same player, has the flag set, so plain D2R apparently
+        // doesn't set it on misc items. A character played through D2RLoader (a D2R plugin loader --
+        // here with charm-inventory, auto-deposit, remote-stash and ethereal-ground-tag plugins --
+        // which leaves a .d2rl file beside the .d2s) has it on EVERY misc item: potions, tomes,
+        // runes, jewels, charms, the Horadric
+        // Cube and the Reimagined Gem Bag ("bag", type "stor"). Reading 3 bits there instead of 128
+        // started the Gem Bag's property list 125 bits too early and aborted the whole load on item
+        // 1. With 128 bits the bag's list is exactly its 511 terminator (an empty bag), the item
+        // ends on the expected byte, and all 39 items decode into real ones.
         if (lHasGUID == 1) { // GUID ???
             if (iType.startsWith("rune") || iType.startsWith("gem")
                     || iType.startsWith("amu") || iType.startsWith("rin")
-                    || isCharm() || !isTypeMisc()) {
+                    || isCharm() || !isTypeMisc() || usesPostV99ItemFormat()) {
 
                 iGUID = "0x" + Integer.toHexString((int) pFile.read(32))
                         + " 0x" + Integer.toHexString((int) pFile.read(32))
@@ -576,12 +697,14 @@ public class D2Item implements Comparable, D2ItemInterface {
             }
         }
 
-        if ("bkd".equals(item_type) && pFile.read(8) != 0) {
+        if ("bkd".equals(item_type) && !usesPostV99ItemFormat() && pFile.read(8) != 0) {
             /*
             Strange case with this quest item, it seems to have a trailing 10th byte of 00
             This needs to be skipped over, it's not clear if there's a general rule here but
             I've implemented it as a specific one just in case. This code reads and checks if there's a zero
             and then resets the skip if there is.
+            In the post-v99 format that 10th byte is explained by the 2 quest difficulty bits read
+            before the GUID flag: 71 bits of header and type code + 3 rounds up to 10 bytes.
              */
             pFile.set_byte_pos(pFile.get_pos() - 8);
         }

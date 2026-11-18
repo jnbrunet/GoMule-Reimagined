@@ -151,11 +151,21 @@ public class D2SharedStashReaderTest {
         // a partial load to the user, which is the honest answer for a pane GoMule cannot decode.
         assertTrue(stash.hasVisibleIncompletePane());
 
+        // Pane 2 went the same way as pane 0 with the 2026-11-03 mod update, for the same reason: its
+        // "Tortured Soul Gauntlets" (set item *ID 308, The Warlord of Blood) was saved while the
+        // row had five rolled set bonuses (aprop1a..aprop5a: deadly, crush, att%, red-dmg%, ac);
+        // the mod has since deleted "crush" and moved the rest up a slot, so the table now declares
+        // four lists where this item stores five. It is item 22 of 46 and everything after it
+        // desyncs (items 23-25 decode as the classic garbage "'s Ear", item 26 fails). The live
+        // stash has no such item.
+        assertTrue(stash.getPane(2).isIncomplete());
+        assertTrue(stash.getPane(2).getIncompleteReason().contains("failed to parse"));
+        assertNotNull(stash.getPane(2).getOriginalBytes(), "a partial pane must still save verbatim");
+
         assertEquals(50, stash.getPane(1).getItems().size());
-        assertEquals(46, stash.getPane(2).getItems().size());
         assertEquals(44, stash.getPane(3).getItems().size());
         assertEquals(32, stash.getPane(4).getItems().size());
-        for (int i = 1; i <= 4; i++) {
+        for (int i : new int[]{1, 3, 4}) {
             assertFalse(stash.getPane(i).isIncomplete(), "pane " + i + " should have loaded completely");
         }
 
@@ -185,9 +195,11 @@ public class D2SharedStashReaderTest {
         // disk even though the UI can't show it.
         int[] markerOffsets = new D2BitReader(originalBytes.clone()).findBytes(D2SharedStashReader.STASH_HEADER_START);
         byte[] originalPane0Bytes = java.util.Arrays.copyOfRange(originalBytes, markerOffsets[0], markerOffsets[1]);
+        byte[] originalPane2Bytes = java.util.Arrays.copyOfRange(originalBytes, markerOffsets[2], markerOffsets[3]);
         byte[] originalPane5Bytes = java.util.Arrays.copyOfRange(originalBytes, markerOffsets[5], markerOffsets[6]);
         byte[] originalPane6Bytes = java.util.Arrays.copyOfRange(originalBytes, markerOffsets[6], originalBytes.length);
         assertArrayEquals(originalPane0Bytes, stash.getPane(0).getOriginalBytes());
+        assertArrayEquals(originalPane2Bytes, stash.getPane(2).getOriginalBytes());
         assertArrayEquals(originalPane5Bytes, stash.getPane(5).getOriginalBytes());
         assertArrayEquals(originalPane6Bytes, stash.getPane(6).getOriginalBytes());
 
@@ -197,6 +209,7 @@ public class D2SharedStashReaderTest {
         int[] savedMarkerOffsets = new D2BitReader(savedBytes.clone()).findBytes(D2SharedStashReader.STASH_HEADER_START);
         assertEquals(7, savedMarkerOffsets.length);
         assertArrayEquals(originalPane0Bytes, java.util.Arrays.copyOfRange(savedBytes, savedMarkerOffsets[0], savedMarkerOffsets[1]));
+        assertArrayEquals(originalPane2Bytes, java.util.Arrays.copyOfRange(savedBytes, savedMarkerOffsets[2], savedMarkerOffsets[3]));
         assertArrayEquals(originalPane5Bytes, java.util.Arrays.copyOfRange(savedBytes, savedMarkerOffsets[5], savedMarkerOffsets[6]));
         assertArrayEquals(originalPane6Bytes, java.util.Arrays.copyOfRange(savedBytes, savedMarkerOffsets[6], savedBytes.length));
 
@@ -206,7 +219,7 @@ public class D2SharedStashReaderTest {
         assertTrue(reread.getPane(0).isIncomplete());
         assertEquals(850000, reread.getPane(0).getGold());
         assertEquals(50, reread.getPane(1).getItems().size());
-        assertEquals(46, reread.getPane(2).getItems().size());
+        assertTrue(reread.getPane(2).isIncomplete());
         assertEquals(44, reread.getPane(3).getItems().size());
         assertEquals(32, reread.getPane(4).getItems().size());
         // Saved verbatim, so the stackable tab re-reads to the same 63 recovered items.
@@ -409,6 +422,68 @@ public class D2SharedStashReaderTest {
     // "The River Stix"'s nofreeze bonus from aprop4a (with amin/amax) to aprop2a (a fixed value,
     // no amin/amax), so a rule keyed on "declares a *rolled* bonus" stopped finding the list this
     // file's own copy of that ring still stores. Both rings are in here, in the first tab.
+    // The live stash as first saved after the 2026-11-03 mod update, which re-encoded a few item
+    // stats (max life/mana %, attacker takes damage -- see D2PreUpdateStatWidths). With the
+    // pre-update itemstatcost.txt, the first item of tab 1 ("Harrogath's Last Stand"), item 7 of
+    // tab 2 ("Mako's Pierce") and item 24 of tab 3 ("Clockwork Horror") all failed with the
+    // "For input string" desync, losing those three tabs from that item on. With the synced table
+    // every tab loads; tab 6 is the stackable rune/gem tab, preserved verbatim as always.
+    @Test
+    public void stashSavedAfterTheStatWidthChangeLoadsEveryTab() throws Exception {
+        D2TxtFile.constructTxtFiles("./d2111");
+        String filename = new java.io.File(
+                Resources.getResource("sharedStash/StatWidthsSharedStashSoftCoreV2.d2i").toURI())
+                .getAbsolutePath();
+
+        D2SharedStash stash = new D2SharedStashReader().readStash(filename);
+
+        assertEquals(7, stash.getPanes().size());
+        int[] expectedCounts = {75, 52, 51, 9, 0};
+        for (int i = 0; i < expectedCounts.length; i++) {
+            assertFalse(stash.getPane(i).isIncomplete(), "pane " + i + ": " + stash.getPane(i).getIncompleteReason());
+            assertEquals(expectedCounts[i], stash.getPane(i).getItems().size(), "pane " + i);
+        }
+        assertEquals("Harrogath's Last Stand", stash.getPane(0).getItems().get(0).getItemName());
+        assertEquals("Mako's Pierce", stash.getPane(1).getItems().get(6).getItemName());
+        assertEquals("Clockwork Horror", stash.getPane(2).getItems().get(23).getItemName());
+        // Saved by the game after the update, so nothing in it needs the pre-update encoding.
+        assertTrue(stash.getItemList().stream().noneMatch(D2Item::usesPreUpdateStatWidths));
+        assertTrue(stash.getPane(5).getIncompleteReason().contains("Stackable"));
+        assertEquals(91, stash.getPane(5).getItems().size());
+    }
+
+    // The same live stash re-saved by the game half an hour later: it now has 17 panes, because the
+    // game added ten more ordinary shared tabs (empty, 68 bytes each) and wrote them AFTER the
+    // stackable tab -- header types 0,0,0,0,0, 1, 0 x10, 2. The reader used to reject anything
+    // over 7 panes ("Stash unsupported"), which left the view disconnected. Now every pane loads,
+    // the 15 type-0 panes are the tabs (skipping the stackable pane in the middle), and a save
+    // writes the file back unchanged.
+    @Test
+    public void stashWithFifteenSharedTabsLoadsAndShowsThemAll() throws Exception {
+        D2TxtFile.constructTxtFiles("./d2111");
+        byte[] originalBytes = Resources.toByteArray(Resources.getResource("sharedStash/FifteenTabsSharedStashSoftCoreV2.d2i"));
+        java.io.File tempFile = java.io.File.createTempFile("FifteenTabsSharedStashSoftCoreV2", ".d2i");
+        tempFile.deleteOnExit();
+        java.nio.file.Files.write(tempFile.toPath(), originalBytes);
+
+        D2SharedStash stash = new D2SharedStashReader().readStash(tempFile.getAbsolutePath());
+
+        assertEquals(17, stash.getPanes().size());
+        assertEquals(java.util.Arrays.asList(0, 1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15),
+                stash.getTabPaneIndices());
+        assertEquals(15, stash.getVisibleTabCount());
+        assertFalse(stash.hasVisibleIncompletePane(), stash.getVisibleIncompleteReason());
+        assertEquals("Harrogath's Last Stand", stash.getPane(0).getItems().get(0).getItemName());
+        for (int i = 6; i <= 15; i++) {
+            assertEquals(0, stash.getPane(i).getItems().size(), "new tab " + i);
+        }
+        assertTrue(stash.getPane(5).getIncompleteReason().contains("Stackable"));
+        assertTrue(stash.getPane(16).getIncompleteReason().contains("No item-list"));
+
+        stash.saveInternal(null);
+        assertArrayEquals(originalBytes, java.nio.file.Files.readAllBytes(tempFile.toPath()));
+    }
+
     @Test
     public void afterlifeStashWithThreeSetBonusListsLoadsTheWholeFirstTab() throws Exception {
         D2TxtFile.constructTxtFiles("./d2111");

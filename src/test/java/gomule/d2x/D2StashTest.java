@@ -12,6 +12,8 @@ import java.nio.file.Files;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public class D2StashTest {
 
@@ -97,6 +99,30 @@ public class D2StashTest {
 
         assertEquals(80, findByType(items, "Flames of Sanctuary", "cqv").getReqLvl());
         assertEquals(80, findByType(items, "Flames of Sanctuary", "aqv").getReqLvl());
+    }
+
+    // The GoMule stash is never re-saved by the game, so after the 2026-11-03 mod update re-encoded
+    // a few stats (see D2PreUpdateStatWidths) it holds items in the old encoding, and once items
+    // saved since are moved in, both at once. Read entirely with the new widths this file stopped
+    // at item 244 of 433. Ichorsting needs neither encoding in particular, Suicide Branch only
+    // parses with the old one, and Tancred's Crowbill parses either way: with the new widths the
+    // following bytes make a garbage "'s Ear" and the item after that fails, with the old ones the
+    // next items are real ("Hannibal's Blurred Vision", "Corgina's Plate").
+    @Test
+    public void itemsSavedBeforeTheStatWidthChangeStillLoad() throws Exception {
+        D2TxtFile.constructTxtFiles("./d2111");
+
+        List<D2Item> items = loadStashFixture();
+
+        assertEquals(433, items.size());
+        assertFalse(findByType(items, "Ichorsting", "mxb").usesPreUpdateStatWidths());
+        assertTrue(findByType(items, "Suicide Branch", "9wn").usesPreUpdateStatWidths());
+        D2Item crowbill = findByType(items, "Tancred's Crowbill", "mpi");
+        assertTrue(crowbill.usesPreUpdateStatWidths());
+        int at = items.indexOf(crowbill);
+        assertEquals("Hannibal's Blurred Vision", items.get(at + 1).getItemName());
+        assertEquals("Corgina's Plate", items.get(at + 2).getItemName());
+        assertTrue(items.stream().noneMatch(i -> i.getItemName().endsWith("'s Ear")));
     }
 
     private List<D2Item> loadStashFixture() throws Exception {

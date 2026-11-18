@@ -44,20 +44,31 @@ public class SharedStashPanel extends JPanel {
         build();
     }
 
+    // The stash images bake in 7 tab buttons. Tabs past the 7th (the game has had 15 shared tabs
+    // since the 2026-11-03 update) are reached through the view's tab selector instead.
+    public static final int BAKED_TAB_SLOTS = 7;
+
     public void build() {
-        // A hidden tab must never stay selected -- e.g. if the previously selected index is no
-        // longer visible. Fall back to the first (always-visible) tab.
-        if (getSharedStash() != null && selectedStashPaneIndex >= getVisibleTabCount()) {
-            selectedStashPaneIndex = 0;
+        // selectedStashPaneIndex is a PANE index (what replacePane() etc. need); only panes that
+        // are tabs may be selected -- fall back to the first tab otherwise (e.g. a stash reloaded
+        // with a different layout).
+        int lTab = getSelectedTab();
+        if (getSharedStash() != null && lTab < 0) {
+            selectedStashPaneIndex = getSharedStash().getTabPaneIndices().get(0);
+            lTab = 0;
         }
-        Image lEmptyBackground = D2ImageCache.getImage("stash" + (selectedStashPaneIndex + 1) + ".png");
+        boolean lOnBakedSlot = lTab >= 0 && lTab < BAKED_TAB_SLOTS;
+        Image lEmptyBackground = D2ImageCache.getImage("stash" + (lOnBakedSlot ? lTab + 1 : 1) + ".png");
         background = fileManager.getGraphicsConfiguration().createCompatibleImage(BG_WIDTH, BG_HEIGHT, Transparency.BITMASK);
         Graphics2D lGraphics = (Graphics2D) background.getGraphics();
         lGraphics.drawImage(lEmptyBackground, 0, 0, this);
         if (getSharedStash() != null) {
-            maskHiddenTabs();
+            // On tab 8 and up no baked button is the selected one, so blank the whole strip rather
+            // than highlight the wrong tab; the selector shows which tab this is.
+            maskHiddenTabs(lOnBakedSlot ? Math.min(getVisibleTabCount(), BAKED_TAB_SLOTS) : 0);
             placeItemsInView();
         }
+        sharedStashView.syncTabSelector();
         repaint();
     }
 
@@ -68,12 +79,24 @@ public class SharedStashPanel extends JPanel {
         return sharedStash == null ? 0 : sharedStash.getVisibleTabCount();
     }
 
+    // The selected tab's position in the tab strip, or -1 (no stash, or a pane that isn't a tab).
+    public int getSelectedTab() {
+        D2SharedStash sharedStash = getSharedStash();
+        return sharedStash == null ? -1 : sharedStash.getTabPaneIndices().indexOf(selectedStashPaneIndex);
+    }
+
+    public void selectTab(int pTab) {
+        D2SharedStash sharedStash = getSharedStash();
+        if (sharedStash == null || pTab < 0 || pTab >= getVisibleTabCount() || pTab == getSelectedTab()) return;
+        selectedStashPaneIndex = sharedStash.getTabPaneIndices().get(pTab);
+        build();
+    }
+
     // Each stashN.png bakes in all 7 "Shared" tab buttons, so the hidden ones are painted over
     // with the empty recessed-frame texture sampled from just right of the strip -- making it look
     // like the stash natively has only the visible number of tabs. Purely cosmetic; no item or
     // pane data is touched.
-    private void maskHiddenTabs() {
-        int visibleTabs = getVisibleTabCount();
+    private void maskHiddenTabs(int visibleTabs) {
         if (visibleTabs >= TAB_X_BOUNDS.length - 1) return; // all 7 shown -> nothing to hide
         if (!(background instanceof BufferedImage)) return;
         BufferedImage image = (BufferedImage) background;

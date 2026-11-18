@@ -106,7 +106,7 @@ public class D2ItemTest {
                 "Full Set Bonus: +2 to Max Grizzly Bears\n" +
                 "+3 to Druid Skill Levels\n" +
                 "+400% Enhanced Damage\n" +
-                "20% Chance of Crushing Blow\n" +
+                "15% Chance of Crushing Blow\n" +
                 "+150 Defense\n" +
                 "+150 to Mana\n" +
                 "Cold Resist +50%\n" +
@@ -399,8 +399,8 @@ public class D2ItemTest {
                 + "8% Life stolen per hit\n"
                 + "+70% Enhanced Defense\n"
                 + "+20 to Strength\n"
-                + "Replenish Life +7\n"
-                + "All Resistances +65\n"
+                + "+25 to Mana\n"
+                + "All Resistances +70\n"
                 + "Damage Reduced by 8%\n"
                 + "25% Better Chance of Getting Magic Items\n"
                 + "4 Sockets (4 used)\n"
@@ -412,27 +412,27 @@ public class D2ItemTest {
                 + "Dol Rune (#14)\n"
                 + "Required Level: 31\n"
                 + "Version: Resurrected\n"
-                + "Weapons: +25% Hits Cause Monsters to Flee\n"
-                + "Armor: Replenish Life +7\n"
-                + "Shields: Replenish Life +7\n"
+                + "Weapons: +15% Faster Cast Rate\n"
+                + "Armor: +25 to Mana\n"
+                + "Shields: +25 to Mana\n"
                 + "\n"
                 + "Um Rune (#22)\n"
                 + "Required Level: 47\n"
                 + "Version: Resurrected\n"
-                + "Weapons: 25% Chance of Open Wounds\n"
-                + "Armor: Cold Resist +15%\n"
-                + "Lightning Resist +15%\n"
-                + "Fire Resist +15%\n"
-                + "Poison Resist +15%\n"
-                + "Shields: Cold Resist +22%\n"
-                + "Lightning Resist +22%\n"
-                + "Fire Resist +22%\n"
-                + "Poison Resist +22%\n"
+                + "Weapons: 20% Chance of Open Wounds\n"
+                + "Armor: Cold Resist +20%\n"
+                + "Lightning Resist +20%\n"
+                + "Fire Resist +20%\n"
+                + "Poison Resist +20%\n"
+                + "Shields: Cold Resist +20%\n"
+                + "Lightning Resist +20%\n"
+                + "Fire Resist +20%\n"
+                + "Poison Resist +20%\n"
                 + "\n"
                 + "Ber Rune (#30)\n"
                 + "Required Level: 63\n"
                 + "Version: Resurrected\n"
-                + "Weapons: 10% Chance of Crushing Blow\n"
+                + "Weapons: +50% Damage to Demons\n"
                 + "Armor: Damage Reduced by 8%\n"
                 + "Shields: Damage Reduced by 8%\n"
                 + "\n"
@@ -474,7 +474,7 @@ public class D2ItemTest {
                 "Shael Rune (#13)\n" +
                 "Required Level: 29\n" +
                 "Version: Resurrected\n" +
-                "Weapons: +20% Increased Attack Speed\n" +
+                "Weapons: +15% Increased Attack Speed\n" +
                 "Armor: +20% Faster Hit Recovery\n" +
                 "Shields: +20% Faster Block Rate\n" +
                 "\n" +
@@ -542,6 +542,6 @@ public class D2ItemTest {
 
     private D2Item loadD2Item(byte[] bytes) throws Exception {
         D2TxtFile.constructTxtFiles("./d2111");
-        return new D2Item("my-test-file", new D2BitReader(bytes), 10);
+        return D2Item.readItem("my-test-file", new D2BitReader(bytes), 10, false);
     }
 }

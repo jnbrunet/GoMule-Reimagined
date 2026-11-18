@@ -92,17 +92,19 @@ class SharedStashPanelMouseClickHandler extends MouseAdapter {
         sharedStashPanel.setCursorDropItem();
     }
 
+    // possibleStashTabClick is a tab-strip slot, not a pane index -- the panel maps it (see
+    // D2SharedStash.getTabPaneIndices()).
     private void setStashTab(Integer possibleStashTabClick) {
         if (possibleStashTabClick == null) return;
-        if (sharedStashPanel.getSelectedStashPaneIndex() == possibleStashTabClick) return;
-        sharedStashPanel.setSelectedStashPaneIndex(possibleStashTabClick);
-        sharedStashPanel.build();
+        sharedStashPanel.selectTab(possibleStashTabClick);
     }
 
     private Integer getPossibleStashTabClick(int x, int y) {
         // Visible (not total) tab count: the DLC's converted "stackable stash" tabs are hidden and
         // must not be selectable -- clicking their now-empty area returns null. See
-        // SharedStashPanel.getVisibleTabCount() / D2SharedStash.getVisibleTabCount().
+        // SharedStashPanel.getVisibleTabCount() / D2SharedStash.getVisibleTabCount(). On tab 8 and
+        // up the baked strip is blanked entirely, so it isn't clickable then either.
+        if (sharedStashPanel.getSelectedTab() >= SharedStashPanel.BAKED_TAB_SLOTS) return null;
         int visibleTabs = this.sharedStashPanel.getVisibleTabCount();
 
         if (x >= 27 && x <= 462 && y >= 51 && y <= 72) {

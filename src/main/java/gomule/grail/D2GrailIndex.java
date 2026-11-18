@@ -134,7 +134,13 @@ public final class D2GrailIndex {
             // rows have no base item code either (e.g. "Gore Ripper", *ID 295 -- apparently a
             // reserved/never-finished unique slot) but DO carry a real "*ID", so filtering on a
             // blank base "code" instead would wrongly exclude those too.
-            if (lRow.get("*ID").isEmpty()) {
+            // Since the 2026-11-03 mod update the header rows carry a "*ID" too (200, 247, 267,
+            // 278, 407), so on their own they would have become five bogus uncategorizable grail
+            // entries. They are still the only rows with nothing in them but a label (and a
+            // "version"): every real row, Gore Ripper and the other code-less ones included, at
+            // least sets "rarity" or "nolimit".
+            if (lRow.get("*ID").isEmpty()
+                    || (lRow.get("code").isEmpty() && lRow.get("rarity").isEmpty() && lRow.get("nolimit").isEmpty())) {
                 continue;
             }
             // 7 rows the mod has permanently removed from the game; not findable under any

@@ -28,7 +28,7 @@ public class D2SharedStashWriter {
     public void write(D2SharedStash stash) {
         D2BitReader bitReader = new D2BitReader(originalContent.clone());
         int[] stashHeaderOffsets = bitReader.findBytes(STASH_HEADER_START);
-        if (stashHeaderOffsets.length > 7) throw new RuntimeException("Stash unsupported");
+        if (stashHeaderOffsets.length > D2SharedStashReader.MAX_PANES) throw new RuntimeException("Stash unsupported");
         List<byte[]> stashPanes = new ArrayList<>();
         for (int i = 0; i < stash.getPanes().size(); i++) {
             D2SharedStash.D2SharedStashPane pane = stash.getPane(i);

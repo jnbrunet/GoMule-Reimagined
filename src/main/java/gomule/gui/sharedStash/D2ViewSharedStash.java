@@ -9,6 +9,7 @@ import gomule.gui.D2ItemListListener;
 import javax.swing.*;
 import javax.swing.event.InternalFrameAdapter;
 import javax.swing.event.InternalFrameEvent;
+import java.awt.*;
 import java.io.File;
 
 public class D2ViewSharedStash extends JInternalFrame implements D2ItemContainer, D2ItemListListener {
@@ -16,6 +17,11 @@ public class D2ViewSharedStash extends JInternalFrame implements D2ItemContainer
     private final String sharedStashFilename;
     private final SharedStashPanel sharedStashPanel;
     private D2SharedStash sharedStash;
+    // Shown above the stash only when it has more tabs than the 7 baked into the stash images
+    // (the game has had 15 shared tabs since the 2026-11-03 update); it reaches every tab.
+    private final JPanel tabSelectorBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 2));
+    private final JComboBox<String> tabSelector = new JComboBox<>();
+    private boolean syncingTabSelector = false;
 
     public D2ViewSharedStash(D2FileManager fileManager, String sharedStashFilename) {
         super(sharedStashFilename, false, true, false, true);
@@ -29,8 +35,19 @@ public class D2ViewSharedStash extends JInternalFrame implements D2ItemContainer
         });
         ToolTipManager.sharedInstance().setDismissDelay(40000);
         ToolTipManager.sharedInstance().setInitialDelay(300);
+        tabSelectorBar.add(new JLabel("Tab:"));
+        tabSelectorBar.add(tabSelector);
+        tabSelectorBar.setVisible(false);
+        tabSelector.addActionListener(e -> {
+            if (!syncingTabSelector && tabSelector.getSelectedIndex() >= 0) {
+                getSharedStashPanel().selectTab(tabSelector.getSelectedIndex());
+            }
+        });
         sharedStashPanel = new SharedStashPanel(fileManager, this);
-        setContentPane(sharedStashPanel);
+        JPanel lContent = new JPanel(new BorderLayout());
+        lContent.add(tabSelectorBar, BorderLayout.NORTH);
+        lContent.add(sharedStashPanel, BorderLayout.CENTER);
+        setContentPane(lContent);
         connect();
         setVisible(true);
         pack();
@@ -126,6 +143,32 @@ public class D2ViewSharedStash extends JInternalFrame implements D2ItemContainer
         }
         setTitle(lTitle);
         sharedStashPanel.build();
+    }
+
+    // Called by SharedStashPanel.build(): rebuilds the tab list (item counts change as items move)
+    // and shows the selector only when some tab isn't reachable through the baked tab buttons.
+    void syncTabSelector() {
+        if (sharedStashPanel == null) return; // during SharedStashPanel's own construction
+        int lTabs = sharedStashPanel.getVisibleTabCount();
+        boolean lShow = lTabs > SharedStashPanel.BAKED_TAB_SLOTS;
+        syncingTabSelector = true;
+        try {
+            tabSelector.removeAllItems();
+            if (lShow) {
+                java.util.List<Integer> lPanes = sharedStash.getTabPaneIndices();
+                for (int i = 0; i < lTabs; i++) {
+                    int lCount = sharedStash.getPane(lPanes.get(i)).getItems().size();
+                    tabSelector.addItem("Tab " + (i + 1) + (lCount == 0 ? " (empty)" : " (" + lCount + " items)"));
+                }
+                tabSelector.setSelectedIndex(Math.max(0, sharedStashPanel.getSelectedTab()));
+            }
+        } finally {
+            syncingTabSelector = false;
+        }
+        if (tabSelectorBar.isVisible() != lShow) {
+            tabSelectorBar.setVisible(lShow);
+            pack();
+        }
     }
 
     public String getSharedStashName() {

@@ -65,8 +65,8 @@ public class D2GrailRunewordFilterTest {
         assertTrue(lShield.contains("Spirit"), lShield.toString());
 
         // "All" is unchanged, and every leaf is a strict subset of it.
-        assertEquals(208, runewordNames(D2GrailModel.ALL_ID, null, false).size());
-        assertTrue(lHelm.size() < 208 && !lHelm.isEmpty(), "a leaf must actually narrow: " + lHelm.size());
+        assertEquals(216, runewordNames(D2GrailModel.ALL_ID, null, false).size());
+        assertTrue(lHelm.size() < 216 && !lHelm.isEmpty(), "a leaf must actually narrow: " + lHelm.size());
     }
 
     /**
@@ -107,7 +107,7 @@ public class D2GrailRunewordFilterTest {
         assertTrue(lPartial.containsAll(lStrict), "partial must include everything strict does");
         assertTrue(lPartial.size() > lStrict.size(), "partial must be wider: "
                 + lPartial.size() + " vs " + lStrict.size());
-        assertTrue(lPartial.size() < 208, "partial must still be a filter: " + lPartial.size());
+        assertTrue(lPartial.size() < 216, "partial must still be a filter: " + lPartial.size());
         for (String lName : lPartial) {
             boolean lUsesOne = false;
             for (Integer lRune : runesOf(lName)) {
@@ -125,13 +125,13 @@ public class D2GrailRunewordFilterTest {
     @Test
     public void anEmptySelectionShowsEverythingAndSoDoesAFullOne() {
         D2TxtFile.constructTxtFiles("./d2111");
-        assertEquals(208, runewordNames(D2GrailModel.ALL_ID, new HashSet<Integer>(), false).size());
+        assertEquals(216, runewordNames(D2GrailModel.ALL_ID, new HashSet<Integer>(), false).size());
 
         Set<Integer> lEveryRune = new TreeSet<Integer>();
-        for (int i = 1; i <= D2GrailRunewords.RUNE_COUNT; i++) {
+        for (int i = 1; i <= D2GrailRunewords.runeCount(); i++) {
             lEveryRune.add(Integer.valueOf(i));
         }
-        assertEquals(208, runewordNames(D2GrailModel.ALL_ID, lEveryRune, false).size());
+        assertEquals(216, runewordNames(D2GrailModel.ALL_ID, lEveryRune, false).size());
     }
 
     /**
