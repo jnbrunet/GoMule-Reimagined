@@ -16,6 +16,34 @@
   notes. They are served from docs/screenshots/ on main.
 -->
 
+### Shared stash: all tabs, with their names
+
+- **The 15-tab shared stash opens.** Since the November 2026 update the game saves ten extra
+  shared tabs after the rune/gem tab, and GoMule refused the whole stash with "Stash unsupported".
+  Every tab now loads, and saving writes the file back unchanged.
+- **A tab list beside the stash.** Every shared tab is listed on the left with its item count, so
+  any tab is one click away (the stash picture only has room for 7 buttons). Empty tabs are greyed
+  out, and the mouse wheel over the stash steps through the tabs.
+- **Custom tab names.** Tabs renamed with the Pyre Stash Search D2RLoader plugin show their names,
+  both in the list and on the stash's own tab buttons.
+
+### Saves from the November 2026 Reimagined update
+
+- **Items saved before and after the update both load.** The update changed how a few stats
+  (max life/mana %, attacker takes damage, life regen per level) are stored without changing the
+  save version. GoMule now reads both encodings, item by item, so an older GoMule stash that mixes
+  them loads completely.
+- **Up-to-date item tables and texts**, including the new runes and their runewords in the Holy
+  Grail view, and rune bonuses (Strength %, Dexterity % ...) that showed as blank lines.
+
+### D2RLoader characters
+
+- **Characters played through D2RLoader load.** Its plugins tag every item with an identifier
+  GoMule did not expect, which stopped the load at the first potion or tome.
+- **The Charm Inventory plugin's charms** are shown and counted as active.
+- **A character with a corpse** (gear left where they died) no longer fails to open, and a
+  "Scroll of Inifuss" no longer cuts the item list short.
+
 ### Characters that would not load
 
 - **Items from the latest Reimagined update are recognised.** GoMule's copy of the mod's tables and

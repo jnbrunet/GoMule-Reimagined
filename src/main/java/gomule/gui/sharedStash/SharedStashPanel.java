@@ -24,6 +24,13 @@ public class SharedStashPanel extends JPanel {
     private static final int TAB_BAND_BOTTOM = 75;  // exclusive; bottom of that band
     // A column of empty recessed frame just right of the tab strip, used as the "no tab" texture.
     private static final int RECESS_SAMPLE_X = 503;
+    // The area of each tab button repainted for a custom name, and the label colours (matching the
+    // baked "SHARED" text of a selected / unselected button).
+    private static final int TAB_LABEL_INSET = 6;
+    private static final int TAB_LABEL_TOP = 56;     // inclusive
+    private static final int TAB_LABEL_BOTTOM = 68;  // exclusive
+    private static final Color SELECTED_TAB_LABEL = new Color(0xE8DDB5);
+    private static final Color TAB_LABEL = new Color(0x8F8775);
     private final D2FileManager fileManager;
     private final D2ViewSharedStash sharedStashView;
     private int selectedStashPaneIndex = 0;
@@ -38,6 +45,11 @@ public class SharedStashPanel extends JPanel {
         setPreferredSize(lSize);
         addMouseListener(new SharedStashPanelMouseClickHandler(this));
         addMouseMotionListener(new SharedStashMouseMotionListener(this));
+        // The wheel steps through the tabs, which with 15 or more of them beats aiming for each one.
+        addMouseWheelListener(e -> {
+            int lTab = getSelectedTab();
+            if (lTab >= 0 && e.getWheelRotation() != 0) selectTab(lTab + (e.getWheelRotation() > 0 ? 1 : -1));
+        });
         setVisible(true);
         ToolTipManager.sharedInstance().setDismissDelay(40000);
         ToolTipManager.sharedInstance().setInitialDelay(300);
@@ -45,7 +57,8 @@ public class SharedStashPanel extends JPanel {
     }
 
     // The stash images bake in 7 tab buttons. Tabs past the 7th (the game has had 15 shared tabs
-    // since the 2026-11-03 update) are reached through the view's tab selector instead.
+    // since the 2026-11-03 update) are reached through the tab list beside the stash
+    // (SharedStashTabSidebar), or the mouse wheel.
     public static final int BAKED_TAB_SLOTS = 7;
 
     public void build() {
@@ -64,11 +77,12 @@ public class SharedStashPanel extends JPanel {
         lGraphics.drawImage(lEmptyBackground, 0, 0, this);
         if (getSharedStash() != null) {
             // On tab 8 and up no baked button is the selected one, so blank the whole strip rather
-            // than highlight the wrong tab; the selector shows which tab this is.
+            // than highlight the wrong tab; the tab list shows which tab this is.
             maskHiddenTabs(lOnBakedSlot ? Math.min(getVisibleTabCount(), BAKED_TAB_SLOTS) : 0);
+            if (lOnBakedSlot) labelNamedTabs(Math.min(getVisibleTabCount(), BAKED_TAB_SLOTS), lTab);
             placeItemsInView();
         }
-        sharedStashView.syncTabSelector();
+        sharedStashView.syncTabList();
         repaint();
     }
 
@@ -107,6 +121,47 @@ public class SharedStashPanel extends JPanel {
             for (int x = xStart; x < xEnd; x++) {
                 image.setRGB(x, y, recessColor);
             }
+        }
+    }
+
+    // The baked buttons all read "SHARED" (at y 59-64, well inside x+14..x+48 of each slot). A tab
+    // with a custom name (see D2StashTabNames) has that word painted over with its own button
+    // texture -- each row sampled from a text-free column near the button's left edge -- and the
+    // name written in its place, shrunk to fit the button.
+    private void labelNamedTabs(int visibleTabs, int selectedTab) {
+        if (!(background instanceof BufferedImage)) return;
+        BufferedImage image = (BufferedImage) background;
+        Graphics2D g = image.createGraphics();
+        try {
+            g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+            for (int tab = 0; tab < visibleTabs; tab++) {
+                String name = sharedStashView.getTabName(tab);
+                if (name == null) continue;
+                int left = TAB_X_BOUNDS[tab] + TAB_LABEL_INSET;
+                int right = TAB_X_BOUNDS[tab + 1] - TAB_LABEL_INSET;
+                for (int y = TAB_LABEL_TOP; y < TAB_LABEL_BOTTOM; y++) {
+                    int texture = image.getRGB(left, y);
+                    for (int x = left + 1; x < right; x++) image.setRGB(x, y, texture);
+                }
+                float size = 11f;
+                Font font = g.getFont().deriveFont(Font.BOLD, size);
+                while (size > 7f && g.getFontMetrics(font).stringWidth(name) > right - left - 2) {
+                    size -= 0.5f;
+                    font = font.deriveFont(size);
+                }
+                g.setFont(font);
+                FontMetrics metrics = g.getFontMetrics();
+                String shown = name;
+                while (shown.length() > 1 && metrics.stringWidth(shown) > right - left - 2) {
+                    shown = shown.substring(0, shown.length() - 1);
+                }
+                g.setColor(tab == selectedTab ? SELECTED_TAB_LABEL : TAB_LABEL);
+                int x = (left + right - metrics.stringWidth(shown)) / 2;
+                int y = (TAB_LABEL_TOP + TAB_LABEL_BOTTOM + metrics.getAscent() - metrics.getDescent()) / 2;
+                g.drawString(shown, x, y);
+            }
+        } finally {
+            g.dispose();
         }
     }
 
