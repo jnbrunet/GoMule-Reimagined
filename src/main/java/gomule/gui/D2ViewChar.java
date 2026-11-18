@@ -108,10 +108,14 @@ public class D2ViewChar extends JInternalFrame implements D2ItemContainer, D2Ite
     private static final int INV_SIZE_Y = 8;
     private static final int BELT_GRID_SIZE_X = 4;
     private static final int BELT_GRID_SIZE_Y = 4;
+    private static final int CHARM_INV_X = 12;
+    private static final int CHARM_INV_Y = 12;
 
     private D2CharPainterPanel iCharPainter;
     private D2MercPainterPanel iMercPainter;
     private D2CharCursorPainterPanel iCharCursorPainter;
+    private D2CharmInvPainterPanel iCharmInvPainter;
+    private JPanel iCharmInvTab;
     private D2Character iCharacter;
     private JTextArea iMessage;
     private JTextArea CJT = new JTextArea();
@@ -165,6 +169,11 @@ public class D2ViewChar extends JInternalFrame implements D2ItemContainer, D2Ite
         lTabs.addTab("Character", lCharPanel);
         setContentPane(lTabs);
         iCharPainter.build();
+
+        // Only shown for a character that has the D2RLoader charm inventory -- see connect().
+        iCharmInvTab = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        iCharmInvPainter = new D2CharmInvPainterPanel();
+        iCharmInvTab.add(iCharmInvPainter);
 
         JPanel lStatPanel = new JPanel();
         lStatPanel.setLayout(new BorderLayout());
@@ -484,6 +493,9 @@ public class D2ViewChar extends JInternalFrame implements D2ItemContainer, D2Ite
             lSkillPanel.build();
             lQuestPanel.build();
             lWayPanel.build();
+            if (iCharacter.hasCharmInventory() && lTabs.indexOfComponent(iCharmInvTab) == -1) {
+                lTabs.insertTab("Charm Bag", null, iCharmInvTab, null, 1);
+            }
 
             iGold.setText(Integer.toString(iCharacter.getGold()));
             iGoldMax.setText(Integer.toString(iCharacter.getGoldMax()));
@@ -516,6 +528,9 @@ public class D2ViewChar extends JInternalFrame implements D2ItemContainer, D2Ite
         }
 
         iCharacter = null;
+        if (lTabs.indexOfComponent(iCharmInvTab) != -1) {
+            lTabs.remove(iCharmInvTab);
+        }
 
         String lText = "Character disconnected";
 
@@ -675,6 +690,7 @@ public class D2ViewChar extends JInternalFrame implements D2ItemContainer, D2Ite
         }
         iCharCursorPainter.build();
         iDeathPainter.build();
+        iCharmInvPainter.build();
 
 
     }
@@ -761,7 +777,8 @@ public class D2ViewChar extends JInternalFrame implements D2ItemContainer, D2Ite
 
         public void mouseClicked(MouseEvent e) {
 
-            if (lTabs.getSelectedIndex() == 6) {
+            // By component, not index: the Charm Bag tab shifts the indexes when it is present.
+            if (lTabs.getSelectedComponent() == lDumpPanel) {
                 dumpChar();
             }
 
@@ -1460,6 +1477,136 @@ public class D2ViewChar extends JInternalFrame implements D2ItemContainer, D2Ite
             Graphics2D lGraphics = (Graphics2D) pGraphics;
 
             lGraphics.drawImage(iBackground, 0, 0, D2CharPainterPanel.this);
+        }
+    }
+
+    // The D2RLoader charm-inv plugin's charm inventory: a plain 10x4 grid, drawn here rather than
+    // from a background image since the game has no art for it. Items pick up and drop through
+    // the shared clipboard exactly like the Character tab's grids, but only charms can go in.
+    class D2CharmInvPainterPanel extends JPanel {
+        private static final long serialVersionUID = 4180715629847053512L;
+        private static final int CELL = GRID_SIZE + GRID_SPACER;
+        private Image iBackground;
+
+        public D2CharmInvPainterPanel() {
+            Dimension lSize = new Dimension(2 * CHARM_INV_X + D2Character.CHARMINVSIZEX * CELL,
+                    2 * CHARM_INV_Y + D2Character.CHARMINVSIZEY * CELL);
+            setSize(lSize);
+            setPreferredSize(lSize);
+
+            addMouseListener(new MouseAdapter() {
+                public void mouseReleased(MouseEvent pEvent) {
+                    if (iCharacter == null) return;
+                    Point lCell = cellAt(pEvent);
+                    if (lCell == null) return;
+                    int lIndex = iCharacter.getCharItemIndex(D2Character.BODY_CHARM_INV_CONTENT, lCell.x, lCell.y);
+                    if (pEvent.getButton() == MouseEvent.BUTTON1) {
+                        if (lIndex != -1) {
+                            D2Item lItem = iCharacter.getCharItem(lIndex);
+                            iCharacter.unmarkCharGrid(lItem);
+                            iCharacter.removeCharItem(lIndex);
+                            D2ViewClipboard.addItem(lItem);
+                            setCursorDropItem();
+                            if (lItem.statModding()) {
+                                iCharacter.updateCharStats("P", lItem);
+                                paintCharStats();
+                            }
+                        } else if (D2ViewClipboard.getItem() != null) {
+                            D2Item lDropItem = D2ViewClipboard.getItem();
+                            if (iCharacter.checkCharGrid(D2Character.BODY_CHARM_INV_CONTENT, lCell.x, lCell.y, lDropItem)) {
+                                lDropItem.set_location((short) 0);
+                                lDropItem.set_body_position((short) 0);
+                                lDropItem.set_row((short) lCell.y);
+                                lDropItem.set_col((short) lCell.x);
+                                lDropItem.set_panel((short) D2Character.BODY_CHARM_INV_CONTENT);
+                                iCharacter.markCharGrid(lDropItem);
+                                iCharacter.addCharItem(D2ViewClipboard.removeItem());
+                                setCursorPickupItem();
+                                if (lDropItem.statModding()) {
+                                    iCharacter.updateCharStats("D", lDropItem);
+                                    paintCharStats();
+                                }
+                            }
+                        }
+                    } else if (pEvent.getButton() == MouseEvent.BUTTON3 && lIndex != -1) {
+                        new ItemRightClickMenu(iCharacter.getCharItem(lIndex), this::deleteMenuItemAction)
+                                .show(D2CharmInvPainterPanel.this, pEvent.getX(), pEvent.getY());
+                    }
+                }
+
+                private void deleteMenuItemAction(D2Item d2Item) {
+                    iCharacter.removeItem(d2Item);
+                    if (d2Item.statModding()) {
+                        iCharacter.updateCharStats("P", d2Item);
+                        paintCharStats();
+                    }
+                }
+
+                public void mouseExited(MouseEvent e) {
+                    setCursorNormal();
+                }
+            });
+            addMouseMotionListener(new MouseMotionAdapter() {
+                public void mouseMoved(MouseEvent pEvent) {
+                    D2Item lCurrentMouse = null;
+                    Point lCell = iCharacter == null ? null : cellAt(pEvent);
+                    if (lCell == null) {
+                        setCursorNormal();
+                    } else {
+                        int lIndex = iCharacter.getCharItemIndex(D2Character.BODY_CHARM_INV_CONTENT, lCell.x, lCell.y);
+                        if (lIndex != -1) {
+                            lCurrentMouse = iCharacter.getCharItem(lIndex);
+                            setCursorPickupItem();
+                        } else if (D2ViewClipboard.getItem() != null
+                                && iCharacter.checkCharGrid(D2Character.BODY_CHARM_INV_CONTENT, lCell.x, lCell.y, D2ViewClipboard.getItem())) {
+                            setCursorDropItem();
+                        } else {
+                            setCursorNormal();
+                        }
+                    }
+                    setToolTipText(lCurrentMouse == null ? null : D2ItemRenderer.itemDumpHtml(lCurrentMouse, false));
+                }
+            });
+        }
+
+        // The grid cell under the mouse, as (column, row), or null outside the grid.
+        private Point cellAt(MouseEvent pEvent) {
+            int lX = pEvent.getX() - CHARM_INV_X;
+            int lY = pEvent.getY() - CHARM_INV_Y;
+            if (lX < 0 || lY < 0) return null;
+            int lCol = lX / CELL;
+            int lRow = lY / CELL;
+            if (lCol >= D2Character.CHARMINVSIZEX || lRow >= D2Character.CHARMINVSIZEY) return null;
+            return new Point(lCol, lRow);
+        }
+
+        public void build() {
+            Dimension lSize = getPreferredSize();
+            iBackground = iFileManager.getGraphicsConfiguration().createCompatibleImage(lSize.width, lSize.height, Transparency.OPAQUE);
+            Graphics2D lGraphics = (Graphics2D) iBackground.getGraphics();
+            lGraphics.setColor(Color.BLACK);
+            lGraphics.fillRect(0, 0, lSize.width, lSize.height);
+            lGraphics.setColor(new Color(60, 60, 60));
+            for (int lRow = 0; lRow < D2Character.CHARMINVSIZEY; lRow++) {
+                for (int lCol = 0; lCol < D2Character.CHARMINVSIZEX; lCol++) {
+                    lGraphics.drawRect(CHARM_INV_X + lCol * CELL, CHARM_INV_Y + lRow * CELL, GRID_SIZE - 1, GRID_SIZE - 1);
+                }
+            }
+            if (iCharacter != null) {
+                for (int i = 0; i < iCharacter.getCharItemNr(); i++) {
+                    D2Item lItem = iCharacter.getCharItem(i);
+                    if (lItem.get_location() != 0 || lItem.get_panel() != D2Character.BODY_CHARM_INV_CONTENT) continue;
+                    lGraphics.drawImage(D2ImageCache.getDC6Image(lItem),
+                            CHARM_INV_X + lItem.get_col() * CELL, CHARM_INV_Y + lItem.get_row() * CELL, this);
+                }
+            }
+            lGraphics.dispose();
+            repaint();
+        }
+
+        public void paint(Graphics pGraphics) {
+            super.paint(pGraphics);
+            pGraphics.drawImage(iBackground, 0, 0, this);
         }
     }
 

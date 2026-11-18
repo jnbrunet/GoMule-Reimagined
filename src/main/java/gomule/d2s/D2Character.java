@@ -37,7 +37,11 @@ import randall.d2files.D2TxtFile;
 import randall.d2files.D2TxtFileItemProperties;
 
 import java.awt.*;
+import java.io.File;
+import java.io.IOException;
 import java.io.PrintWriter;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -52,6 +56,10 @@ public class D2Character extends D2ItemListAdapter {
     public static final int BODY_BELT_CONTENT = 2; // the belt content
     public static final int BODY_CUBE_CONTENT = 4;
     public static final int BODY_STASH_CONTENT = 5;
+    // The D2RLoader "charm-inv" plugin's separate charm inventory. It stores its charms as
+    // ordinary character items on panel 7, which no vanilla grid uses; the plugin's own table
+    // load logs the grid as gridX=10, gridY=4.
+    public static final int BODY_CHARM_INV_CONTENT = 7;
     public static final int BODY_CURSOR = 10;
     public static final int BODY_HEAD = 11;
     public static final int BODY_NECK = 12;
@@ -75,6 +83,8 @@ public class D2Character extends D2ItemListAdapter {
     public static final int BELTSIZEY = 4;
     public static final int CUBESIZEX = 16;
     public static final int CUBESIZEY = 13;
+    public static final int CHARMINVSIZEX = 10;
+    public static final int CHARMINVSIZEY = 4;
     D2TxtFileItemProperties mercHireCol;
     private D2BitReader iReader;
     private ArrayList iCharItems;
@@ -93,6 +103,7 @@ public class D2Character extends D2ItemListAdapter {
     private boolean[][] iStashGrid;
     private boolean[][] iInventoryGrid;
     private boolean[][] iCubeGrid;
+    private boolean[][] iCharmInvGrid;
     private boolean[][] iBeltGrid;
     private boolean[] iEquipped;
     private boolean[] iMerc;
@@ -266,6 +277,7 @@ public class D2Character extends D2ItemListAdapter {
         iInventoryGrid = new boolean[INVSIZEY][INVSIZEX];
         iBeltGrid = new boolean[BELTSIZEY][BELTSIZEX];
         iCubeGrid = new boolean[CUBESIZEY][CUBESIZEX];
+        iCharmInvGrid = new boolean[CHARMINVSIZEY][CHARMINVSIZEX];
         iEquipped = new boolean[13];
         iMerc = new boolean[13];
         iCorpse = new boolean[13];
@@ -508,19 +520,32 @@ public class D2Character extends D2ItemListAdapter {
         }
     }
 
+    // The corpse block follows the character's items: "JM", a 16-bit corpse count, 12 bytes per
+    // corpse, then "JM", a 16-bit item count and the items, stored back-to-back like every other D2R
+    // item list (no "JM" in front of each item). This used to read that count as 8 bits, starting
+    // the first item a byte early, and it went unnoticed until a real character ("Madz") died with
+    // gear on: its 9 corpse items (Skull Horn, The Mahim-Oak Curio, ..., Insight) failed and took the
+    // whole load down with them.
     private void readCorpse() throws Exception {
-
+        // After a character item failed, iItemEnd is only where the last good item ended, so a
+        // "JM" searched from there is not the corpse's; its bytes are kept verbatim regardless.
+        if (iItemsIncomplete) return;
         int corpseStart = iReader.findNextFlag("JM", iItemEnd + 2);
         if (corpseStart < 0 || corpseStart > iKF || corpseStart > iJF) return;
         iReader.set_byte_pos(corpseStart);
         iReader.skipBytes(2);
-        int num_items = (int) (iReader.read(8));
-        int lLastItemEnd = iReader.get_byte_pos();
+        int num_items = (int) (iReader.read(16));
         for (int i = 0; i < num_items; i++) {
-            int lItemStart = iReader.findNextFlag("JM", lLastItemEnd);
-            if (lItemStart == -1) throw new Exception("Corpse item " + (i + 1) + " not found.");
-            D2Item lItem = D2Item.readItem(iFileName, iReader, iCharLevel, i + 1 < num_items);
-            lLastItemEnd = lItemStart + lItem.getItemLength();
+            D2Item lItem;
+            try {
+                lItem = D2Item.readItem(iFileName, iReader, iCharLevel, i + 1 < num_items);
+            } catch (Exception pEx) {
+                // Like the merc items: keep every character item and show the load as partial.
+                iItemsIncomplete = true;
+                iItemsIncompleteReason = "Corpse item " + (i + 1) + " of " + num_items
+                        + " failed to parse (all character items loaded fine): " + pEx;
+                return;
+            }
             if (lItem.isCursorItem()) {
                 if (iCharCursorItem != null) throw new Exception("Double cursor item found");
                 iCharCursorItem = lItem;
@@ -852,6 +877,9 @@ public class D2Character extends D2ItemListAdapter {
         for (int i = 0; i < CUBESIZEY; i++) {
             for (int j = 0; j < CUBESIZEX; j++) iCubeGrid[i][j] = false;
         }
+        for (int i = 0; i < CHARMINVSIZEY; i++) {
+            for (int j = 0; j < CHARMINVSIZEX; j++) iCharmInvGrid[i][j] = false;
+        }
     }
 
     public boolean markCharGrid(D2Item i) {
@@ -913,6 +941,17 @@ public class D2Character extends D2ItemListAdapter {
                 if ((col + width) > STASHSIZEX) return false;
                 for (j = row; j < row + height; j++) {
                     for (k = col; k < col + width; k++) iStashGrid[j][k] = true;
+                }
+                break;
+            case BODY_CHARM_INV_CONTENT: // D2RLoader charm inventory
+                row = (int) i.get_row();
+                col = (int) i.get_col();
+                width = (int) i.get_width();
+                height = (int) i.get_height();
+                if ((row + height) > CHARMINVSIZEY) return false;
+                if ((col + width) > CHARMINVSIZEX) return false;
+                for (j = row; j < row + height; j++) {
+                    for (k = col; k < col + width; k++) iCharmInvGrid[j][k] = true;
                 }
                 break;
         }
@@ -1023,6 +1062,17 @@ public class D2Character extends D2ItemListAdapter {
                         iStashGrid[j][k] = false;
                 }
                 break;
+            case BODY_CHARM_INV_CONTENT: // D2RLoader charm inventory
+                row = (int) i.get_row();
+                col = (int) i.get_col();
+                width = (int) i.get_width();
+                height = (int) i.get_height();
+                if ((row + height) > CHARMINVSIZEY) return false;
+                if ((col + width) > CHARMINVSIZEX) return false;
+                for (j = row; j < row + height; j++) {
+                    for (k = col; k < col + width; k++) iCharmInvGrid[j][k] = false;
+                }
+                break;
         }
         return true;
     }
@@ -1096,6 +1146,15 @@ public class D2Character extends D2ItemListAdapter {
                 for (i = x; i < x + w; i++) {
                     for (j = y; j < y + h; j++) {
                         if (j >= iStashGrid.length || i >= iStashGrid[j].length || iStashGrid[j][i]) return false;
+                    }
+                }
+                break;
+            case BODY_CHARM_INV_CONTENT:
+                // The plugin's charminvtypes table admits only the "char" item type.
+                if (!pItem.isCharm()) return false;
+                for (i = x; i < x + w; i++) {
+                    for (j = y; j < y + h; j++) {
+                        if (j >= iCharmInvGrid.length || i >= iCharmInvGrid[j].length || iCharmInvGrid[j][i]) return false;
                     }
                 }
                 break;
@@ -1233,8 +1292,31 @@ public class D2Character extends D2ItemListAdapter {
                     if (x >= 0 && x < iStashGrid[y].length) return iStashGrid[y][x];
                 }
                 return false;
+            case BODY_CHARM_INV_CONTENT:
+                if (y >= 0 && y < iCharmInvGrid.length) {
+                    if (x >= 0 && x < iCharmInvGrid[y].length) return iCharmInvGrid[y][x];
+                }
+                return false;
         }
         return true;
+    }
+
+    // Whether this character has the D2RLoader "charm-inv" plugin's charm inventory. An empty one
+    // leaves no trace in the .d2s itself, but D2RLoader writes a .d2rl file beside the save that
+    // lists the plugins active when it was saved, by id ("charm-inv"); a charm already stored on
+    // its panel is proof on its own, should that file be missing.
+    public boolean hasCharmInventory() {
+        for (int i = 0; i < iCharItems.size(); i++) {
+            if (((D2Item) iCharItems.get(i)).get_panel() == BODY_CHARM_INV_CONTENT) return true;
+        }
+        File lLoaderFile = new File(iFileName.replaceFirst("(?i)\\.d2s$", ".d2rl"));
+        if (!lLoaderFile.isFile()) return false;
+        try {
+            byte[] lContent = Files.readAllBytes(lLoaderFile.toPath());
+            return new String(lContent, StandardCharsets.ISO_8859_1).contains("charm-inv");
+        } catch (IOException pEx) {
+            return false;
+        }
     }
 
     public boolean checkMercPanel(int panel, int x, int y, D2Item pItem) {

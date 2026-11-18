@@ -802,12 +802,11 @@ public class D2CharacterTest {
         assertTrue(veilOfSteel.getPropCollection().stream()
                 .anyMatch(o -> ((gomule.item.D2Prop) o).getPNum() == 16), "enhanced defense");
     }
-    // A classic quest item -- "type == ques" WITH a real misc.txt quest number, the family that
-    // isReimaginedQuestItem() deliberately excludes -- hits the dropped-padding-byte quirk when its
-    // body lands byte-aligned: "A Jade Figurine" (j34, quest 19) read one byte short, so the next
+    // A compact quest item with misc.txt questdiffcheck stores a 2-bit difficulty before its GUID
+    // flag. Without those bits "A Jade Figurine" (j34, quest 19) read one byte short, so the next
     // item started a byte early and the whole rest of the file (34 of 59 items, including every
-    // equipped piece) was lost. The Horadric Cube in this same character is the control: also a
-    // classic quest item, but its body ends mid-byte, so it needs nothing and is untouched.
+    // equipped piece) was lost. The Horadric Cube in this same character is the control: a quest
+    // item without questdiffcheck, which has no such bits.
     @Test
     public void paladinWithByteAlignedQuestItemParsesFully() throws Exception {
         D2TxtFile.constructTxtFiles("./d2111");
@@ -866,6 +865,153 @@ public class D2CharacterTest {
         assertEquals("Enfeeblement Arrows", items.get(54).getItemName());
         assertEquals("Quiver of Slaying", items.get(55).getItemName());
         assertEquals("Arrows of Piercing", items.get(63).getItemName());
+    }
+
+    // A barbarian played through D2RLoader, whose plugins set the GUID flag on every misc item.
+    // The legacy rule read 3 bits for a misc item's GUID instead of 128, so the very first item
+    // (an empty Gem Bag) read its property list from the middle of the GUID and the load aborted
+    // on item 1 of 39. The charm-inventory plugin's charms sit on panel 7, which no vanilla grid
+    // has; they still load and are kept in the item list.
+    @Test
+    public void d2rLoaderCharacterWithMiscItemGuidsParsesFully() throws Exception {
+        D2TxtFile.constructTxtFiles("./d2111");
+        D2Character d2Character = new D2Character(
+                new File(Resources.getResource("charFiles/d2rLoaderGuids.d2s").toURI()).getAbsolutePath());
+
+        assertEquals("Madz", d2Character.getCharName());
+        assertFalse(d2Character.isItemsIncomplete(), d2Character.getItemsIncompleteReason());
+        assertEquals(39, d2Character.getItemList().size());
+
+        List<D2Item> items = d2Character.getItemList();
+        assertEquals("bag", items.get(0).getItem_type());
+        assertEquals(33, items.get(0).getItemLength());
+        assertEquals(0, items.get(0).getPropCollection().size(), "the Gem Bag is empty");
+        assertEquals("Leather Gloves [N]", items.get(1).getItemName());
+        assertEquals("Horadric Cube", items.get(7).getItemName());
+        assertEquals("Gemmed Spear [N]", items.get(8).getItemName());
+        assertEquals("Charged Ring of the Apprentice", items.get(9).getItemName());
+        assertEquals("Tome of Town Portal", items.get(28).getItemName());
+        assertEquals("Bane's Oathmaker", items.get(37).getItemName());
+        assertEquals(4, items.stream().filter(i -> i.get_panel() == 7).count(), "charm-inventory charms");
+    }
+
+    // The same D2RLoader character later on, carrying quest items: the GUID flag of "A Jade Figurine"
+    // sits behind its 2-bit quest difficulty, so reading the flag 2 bits early skipped the 128-bit
+    // GUID and lost the 20 items after it. Mephisto's Soulstone has the same 2 bits, and the Horadric
+    // Cube, which has no questdiffcheck, must not get them.
+    @Test
+    public void d2rLoaderCharacterWithQuestItemGuidsParsesFully() throws Exception {
+        D2TxtFile.constructTxtFiles("./d2111");
+        D2Character d2Character = new D2Character(
+                new File(Resources.getResource("charFiles/d2rLoaderQuestItems.d2s").toURI()).getAbsolutePath());
+
+        assertEquals("Madz", d2Character.getCharName());
+        assertFalse(d2Character.isItemsIncomplete(), d2Character.getItemsIncompleteReason());
+        assertEquals(52, d2Character.getItemList().size());
+
+        List<D2Item> items = d2Character.getItemList();
+        assertEquals("A Jade Figurine", items.get(30).getItemName());
+        assertEquals(27, items.get(30).getItemLength());
+        assertEquals("The Mahim-Oak Curio", items.get(31).getItemName());
+        assertEquals("Ettercap", items.get(32).getItemName());
+        assertEquals("Horadric Cube", items.get(33).getItemName());
+        assertEquals(33, items.get(33).getItemLength());
+        assertEquals("Mephisto's Soulstone", items.get(34).getItemName());
+        assertEquals(25, items.get(34).getItemLength());
+        assertEquals("Coaldark", items.get(35).getItemName());
+        assertEquals("Balance of Power", items.get(51).getItemName());
+    }
+
+    // The same character again, now carrying a "Scroll of Inifuss" and with a corpse. The scroll's
+    // body (GUID and quest-difficulty bits included) ends exactly on a byte boundary and still has
+    // its padding byte; without it the next item started a byte early. The corpse's item count is
+    // 16 bits; read as 8, the first corpse item started a byte early and the load aborted.
+    @Test
+    public void d2rLoaderCharacterWithAlignedQuestItemAndCorpseParsesFully() throws Exception {
+        D2TxtFile.constructTxtFiles("./d2111");
+        D2Character d2Character = new D2Character(
+                new File(Resources.getResource("charFiles/d2rLoaderScrollOfInifuss.d2s").toURI()).getAbsolutePath());
+
+        assertEquals("Madz", d2Character.getCharName());
+        assertFalse(d2Character.isItemsIncomplete(), d2Character.getItemsIncompleteReason());
+        assertEquals(65, d2Character.getItemList().size());
+        assertEquals(2, d2Character.getMercItemNr());
+
+        List<D2Item> items = d2Character.getItemList();
+        assertEquals("Scroll of Inifuss", items.get(49).getItemName());
+        assertEquals(26, items.get(49).getItemLength());
+        assertEquals("rvs", items.get(50).getItem_type());
+        assertEquals("mp2", items.get(51).getItem_type());
+        assertEquals("mp2", items.get(62).getItem_type());
+        assertEquals("The General's Tan Do Li Ga", items.get(63).getItemName());
+        assertEquals("Bane's Oathmaker", items.get(64).getItemName());
+
+        assertEquals(9, d2Character.getCorpseItemNr());
+        assertEquals("Skull Horn", d2Character.getCorpseItem(0).getItemName());
+        assertEquals("The Mahim-Oak Curio", d2Character.getCorpseItem(1).getItemName());
+        assertEquals("Tortured Soul Gauntlets", d2Character.getCorpseItem(7).getItemName());
+        assertEquals("Insight", d2Character.getCorpseItem(8).getItemName());
+    }
+
+    // The charm-inv plugin's charms live on panel 7, a 10x4 grid the plugin restricts to charms.
+    @Test
+    public void d2rLoaderCharmInventoryIsAGridOfCharms() throws Exception {
+        D2TxtFile.constructTxtFiles("./d2111");
+        D2Character d2Character = new D2Character(
+                new File(Resources.getResource("charFiles/d2rLoaderGuids.d2s").toURI()).getAbsolutePath());
+
+        assertTrue(d2Character.hasCharmInventory(), "charms stored on panel 7 prove the bag exists");
+        List<D2Item> items = d2Character.getItemList();
+        List<D2Item> bagCharms = new java.util.ArrayList<>();
+        for (D2Item item : items) {
+            if (item.get_panel() == D2Character.BODY_CHARM_INV_CONTENT) bagCharms.add(item);
+        }
+        for (D2Item charm : bagCharms) {
+            assertTrue(charm.isCharm(), charm.getItemName());
+            assertTrue(charm.isEquipped(), charm.getItemName() + " grants its bonuses from the bag");
+            assertTrue(d2Character.checkCharPanel(D2Character.BODY_CHARM_INV_CONTENT, charm.get_col(), charm.get_row(), null),
+                    charm.getItemName() + " occupies its cell");
+            assertEquals(d2Character.getItemList().indexOf(charm),
+                    d2Character.getCharItemIndex(D2Character.BODY_CHARM_INV_CONTENT, charm.get_col(), charm.get_row()));
+        }
+
+        // Only charms can be dropped in, and only inside the grid.
+        D2Item gemBag = items.get(0);
+        D2Item charm = bagCharms.get(0);
+        int freeCol = -1;
+        for (int col = 0; col < D2Character.CHARMINVSIZEX && freeCol == -1; col++) {
+            if (!d2Character.checkCharPanel(D2Character.BODY_CHARM_INV_CONTENT, col, 0, null)
+                    && !d2Character.checkCharPanel(D2Character.BODY_CHARM_INV_CONTENT, col, 1, null)
+                    && !d2Character.checkCharPanel(D2Character.BODY_CHARM_INV_CONTENT, col, 2, null)) freeCol = col;
+        }
+        assertTrue(freeCol != -1);
+        assertTrue(d2Character.checkCharGrid(D2Character.BODY_CHARM_INV_CONTENT, freeCol, 0, charm));
+        assertFalse(d2Character.checkCharGrid(D2Character.BODY_CHARM_INV_CONTENT, freeCol, 0, gemBag), "not a charm");
+        assertFalse(d2Character.checkCharGrid(D2Character.BODY_CHARM_INV_CONTENT, freeCol, D2Character.CHARMINVSIZEY, charm),
+                "below the grid");
+    }
+
+    // An empty bag leaves nothing in the .d2s; D2RLoader's .d2rl beside it names the plugin instead.
+    @Test
+    public void charmInventoryIsDetectedFromTheD2RLoaderFileAndOnlyThere() throws Exception {
+        D2TxtFile.constructTxtFiles("./d2111");
+        File source = new File(Resources.getResource("charFiles/pally11.d2s").toURI());
+        assertFalse(new D2Character(source.getAbsolutePath()).hasCharmInventory());
+
+        File dir = java.nio.file.Files.createTempDirectory("charmInv").toFile();
+        File save = new File(dir, "Zealer.d2s");
+        java.nio.file.Files.copy(source.toPath(), save.toPath());
+        File loader = new File(dir, "Zealer.d2rl");
+        try {
+            java.nio.file.Files.write(loader.toPath(), "D2RL\0\0\0auto-deposit\0\0\0d2rl-auto-deposit.dll".getBytes("ISO-8859-1"));
+            assertFalse(new D2Character(save.getAbsolutePath()).hasCharmInventory(), "other plugins only");
+            java.nio.file.Files.write(loader.toPath(), "D2RL\0\0\0charm-inv\0\0\0Charm Inventory".getBytes("ISO-8859-1"));
+            assertTrue(new D2Character(save.getAbsolutePath()).hasCharmInventory());
+        } finally {
+            loader.delete();
+            save.delete();
+            dir.delete();
+        }
     }
 
 }

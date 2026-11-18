@@ -23,6 +23,7 @@ package gomule.item;
 
 import com.google.common.primitives.Ints;
 import gomule.D2Files;
+import gomule.d2s.D2Character;
 import gomule.util.D2BitReader;
 import gomule.util.D2ItemException;
 import randall.d2files.D2TxtFile;
@@ -764,20 +765,20 @@ public class D2Item implements Comparable, D2ItemInterface {
             pFile.skipBits(8);
         }
         // The CLASSIC quest items -- "type == ques" with a NON-empty misc.txt quest column, the
-        // complement of isReimaginedQuestItem()'s family and the ones that have always parsed
-        // untouched -- hit the dropped-padding-byte quirk instead of a fixed trailing field: the
-        // generic end-of-item rounding (getNextByteBoundaryInBits, "(pos + 7) & ~7") only advances
-        // when there are leftover bits, so a body that lands exactly on a byte boundary silently
-        // loses its padding byte, same as the simple potions and loose/socketed runes above. Found
-        // in a real character ("Zealer"): "A Jade Figurine" (j34, quest 19) ended byte-aligned here
-        // and read one byte short, so the next item started a byte early and failed to decode --
-        // every item after it, more than half the file, was lost. Chain-scanning its own bytes put
-        // the real next item ("MP3", then a run of real amulets, gloves and helms) exactly one byte
-        // later, confirming +8. Gated on alignment, which is what separates it from the classic
-        // quest items that need nothing: the Horadric Cube ("box", quest 10) in that same file ends
-        // mid-byte (offset 3) and is untouched. Kept separate from the blank-quest family above
-        // rather than folded into one "ques" rule, so their unconditional byte can never stack with
-        // this one. What this padding byte holds is still unknown.
+        // complement of isReimaginedQuestItem()'s family -- hit the dropped-padding-byte quirk instead
+        // of a fixed trailing field: the generic end-of-item rounding (getNextByteBoundaryInBits,
+        // "(pos + 7) & ~7") only advances when there are leftover bits, so a body that lands exactly
+        // on a byte boundary silently loses its padding byte, same as the simple potions and
+        // loose/socketed runes above. This rule first came from "A Jade Figurine" (j34), which turned
+        // out to be the 2 unread quest-difficulty bits instead (see the questdiffcheck skip): with
+        // them it ends mid-byte and this never fires for it. A real D2RLoader character ("Madz")
+        // then showed the quirk is real anyway: its "Scroll of Inifuss" (bks, quest 5), GUID and
+        // difficulty bits included, ends exactly on bit 200 and read one byte short, so the next
+        // item started a byte early and failed, and the corpse reader then tripped over the
+        // leftovers and aborted the whole load. Chain-scanning put the real next item exactly one
+        // byte later, followed by a run of real potions and the character's real uniques. Every
+        // other classic quest item in the fixtures and the player's saves (box, mss, j34) ends
+        // mid-byte and is untouched. What this padding byte holds is still unknown.
         if (isClassicQuestItem() && usesPostV99ItemFormat() && (pFile.get_pos() % 8) == 0) {
             pFile.skipBits(8);
         }
@@ -2290,7 +2291,7 @@ public class D2Item implements Comparable, D2ItemInterface {
 
         if (get_location() == 1) {
             return true;
-        } else if (get_panel() == 1 && isCharm()) {
+        } else if (isActiveCharm()) {
             return true;
         } else {
             return false;
@@ -2308,11 +2309,18 @@ public class D2Item implements Comparable, D2ItemInterface {
                 if (get_body_position() == 11 || get_body_position() == 12) return true;
             }
             return false;
-        } else if (get_panel() == 1 && isCharm()) {
+        } else if (isActiveCharm()) {
             return true;
         } else {
             return false;
         }
+    }
+
+    // A charm grants its bonuses from the inventory, or from the D2RLoader charm-inv plugin's
+    // own charm inventory (panel 7), which exists for exactly that purpose.
+    private boolean isActiveCharm() {
+        return isCharm() && get_location() == 0
+                && (get_panel() == 1 || get_panel() == D2Character.BODY_CHARM_INV_CONTENT);
     }
 
     public int getSetSize() {
@@ -2441,6 +2449,8 @@ public class D2Item implements Comparable, D2ItemInterface {
 
         if (get_location() == 0 && get_panel() == 1 && (getName().toLowerCase().equals("horadric cube") || isCharm() || getName().toLowerCase().equals("key") || getName().toLowerCase().indexOf("tome of") != -1)) {
             //Inv
+        } else if (get_location() == 0 && get_panel() == D2Character.BODY_CHARM_INV_CONTENT) {
+            //D2RLoader charm inventory
         } else if (get_location() == 2) {
             //Belt
         } else if (get_location() == 0 && get_panel() == 5 && getName().toLowerCase().equals("horadric cube")) {
